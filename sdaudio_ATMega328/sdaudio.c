@@ -8,7 +8,7 @@
 
 #define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
 
-uint8_t buffer[2][512];
+uint8_t buffer[2][256];
 
 volatile uint8_t playb;
 volatile uint8_t playidx;
@@ -17,7 +17,7 @@ volatile UINT playcnt;
 volatile uint8_t readb;
 volatile UINT readcnt;
 
-
+volatile uint8_t cnt;
 
 /* Tpwm = 250/8M = 31.25us (fpwm = 32kHz)            */
 /* Tint = 1/8k = 125us                               */
@@ -39,23 +39,14 @@ void initpwm(void)
 	TIMSK2 = 0;
 }
 
-volatile uint8_t cnt;
-
 void startplayisr(void)
 {
-//	wave_count = 0;
 	TIMSK2 = _BV(OCIE2A);
-
-	TCCR1B = 0;
-	TIMSK1 = 0;
 }
 
 static void stopplayisr(void)
 {
 	TIMSK2 = 0;
-
-  TCCR1B = 0b00001011;
-  TIMSK1 = 0b00000010;
 }
 
 static uint8_t get_byte(void)
@@ -86,13 +77,11 @@ static uint8_t get_byte(void)
 	playidx = i;
 	playcnt = n;
 
-//	if (d < 3) d = 3;
-//	d -= 3;
-//	if (d > 249) d = 249;
+	if (d < 3) d = 3;
+	d -= 3;
+	if (d > 249) d = 249;
 	return d;
 }
-
-volatile uint8_t r;
 
 ISR(TIMER2_COMPA_vect)
 {
@@ -112,12 +101,9 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 	BYTE b;
 	UINT rb;
 
-//	usart_write_string("loadheader : \r\n");
 	if (f_read(fp, buffer[0], 12, &rb) != FR_OK) return 1;	/* Load file header (12 bytes) */
 
 	if (rb != 12 || LD_DWORD(buffer[0]+8) != FCC('W','A','V','E')) return 0;
-
-//	usart_write_string("loadheader : WAV file ... OK\r\n");
 
 	for (;;) {
 		f_read(fp, buffer[0], 8, &rb);			/* Get Chunk ID and size */
@@ -126,25 +112,21 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 
 		switch (LD_DWORD(&buffer[0][0])) {		/* Switch by chunk ID */
 		case FCC('f','m','t',' ') :					/* 'fmt ' chunk */
-//	usart_write_string("loadheader : fmt chunk\r\n");
 			if (sz & 1) sz++;						/* Align chunk size */
 			if (sz > 100 || sz < 16) return 0;		/* Check chunk size */
 			f_read(fp, buffer[0], sz, &rb);			/* Get content */
 			if (rb != sz) return 0;
-			if (buffer[0][0] != 1) return 0;			/* Check coding type (LPCM) */
+			if (buffer[0][0] != 1) return 0;		/* Check coding type (LPCM) */
 			b = buffer[0][2];
 			if (b != 1) return 0;					/* Mono Only */
 			b = buffer[0][14];
 			if (b != 8) return 0;					/* resolution 8bit only */
-			f = LD_DWORD(&buffer[0][4]);				/* Check sampling freqency (8k-48k) */
+			f = LD_DWORD(&buffer[0][4]);			/* Check sampling freqency (8k-48k) */
 			if (f != 8000) return 4;				/* 8kHz only */
-//	usart_write_string("loadheader : fmt chunk ... OK\r\n");
 			break;
 
 		case FCC('d','a','t','a') :				/* 'data' chunk */
-//	usart_write_string("loadheader : data chunk\r\n");
 			if (sz < 1024) return 0;				/* Check size */
-//	usart_write_string("loadheader : data chunk ... OK\r\n");
 			return sz;								/* Start to play */
 
 		case FCC('D','I','S','P') :				/* 'DISP' chunk */
@@ -172,23 +154,22 @@ void playfile(FIL* fp)
 	size = loadheader(fp);
 	if (size < 1024) return;
 
-//	usart_write_string("loadheader : OK\r\n");
+	usart_write_string("loadheader : OK\r\n");
 
-
-	res = f_read(fp, buffer[0], 512 - (fp->fptr % 512), &rb);
+	res = f_read(fp, buffer[0], 256 - (fp->fptr % 256), &rb);
 	size -= rb;
 	playcnt = rb;
 	if (res != FR_OK) return;
 
-	res = f_read(fp, buffer[1], 512, &rb);
+	res = f_read(fp, buffer[1], 256, &rb);
 	size -= rb;
 	readcnt = rb;
-	if (res != FR_OK || rb != 512) return;
+	if (res != FR_OK || rb != 256) return;
 
 	playb = readb = 0;
 	playidx = 0;
 
-//	usart_write_string("playfile : start\r\n");
+	usart_write_string("playfile : start\r\n");
 
 	startplayisr();
 
@@ -201,7 +182,7 @@ void playfile(FIL* fp)
 			sei();
 		} while (p == r);
 
-		rsize = (size > 512) ? 512 : (UINT)size;
+		rsize = (size > 256) ? 256 : (UINT)size;
 		res  = f_read(fp, buffer[readb], rsize, &rb);
 		if (res != FR_OK) break;
 
@@ -212,14 +193,14 @@ void playfile(FIL* fp)
 		readcnt = rb;
 		sei();
 
-		if (rb != 512) break;
+		if (rb != 256) break;
 	}
 
 	while (playcnt) ;
 
 	stopplayisr();
 
-//	usart_write_string("playfile : play end\r\n");
+	usart_write_string("playfile : play end\r\n");
 
 	/* Center Level */
 	OCR2B = 125;
