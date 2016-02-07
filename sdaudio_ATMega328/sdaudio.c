@@ -1,6 +1,5 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <avr/pgmspace.h>
 
 #include "sdaudio.h"
 #include "ff.h"
@@ -8,7 +7,7 @@
 
 #define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
 
-uint8_t buffer[2][256];
+uint8_t buffer[512];
 
 volatile uint8_t playb;
 volatile uint8_t playidx;
@@ -64,7 +63,7 @@ static uint8_t get_byte(void)
 		return 125;
 	}
 
-	d = buffer[pb][i++];
+	d = buffer[((uint16_t)pb << 8) + i++];
 
 	if (!--n) {
 		if (pb == readb) {
@@ -101,27 +100,27 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 	BYTE b;
 	UINT rb;
 
-	if (f_read(fp, buffer[0], 12, &rb) != FR_OK) return 1;	/* Load file header (12 bytes) */
+	if (f_read(fp, buffer, 12, &rb) != FR_OK) return 1;	/* Load file header (12 bytes) */
 
-	if (rb != 12 || LD_DWORD(buffer[0]+8) != FCC('W','A','V','E')) return 0;
+	if (rb != 12 || LD_DWORD(buffer+8) != FCC('W','A','V','E')) return 0;
 
 	for (;;) {
-		f_read(fp, buffer[0], 8, &rb);			/* Get Chunk ID and size */
+		f_read(fp, buffer, 8, &rb);				/* Get Chunk ID and size */
 		if (rb != 8) return 0;
-		sz = LD_DWORD(&buffer[0][4]);				/* Chunk size */
+		sz = LD_DWORD(&buffer[4]);					/* Chunk size */
 
-		switch (LD_DWORD(&buffer[0][0])) {		/* Switch by chunk ID */
+		switch (LD_DWORD(&buffer[0])) {			/* Switch by chunk ID */
 		case FCC('f','m','t',' ') :					/* 'fmt ' chunk */
 			if (sz & 1) sz++;						/* Align chunk size */
 			if (sz > 100 || sz < 16) return 0;		/* Check chunk size */
-			f_read(fp, buffer[0], sz, &rb);			/* Get content */
+			f_read(fp, buffer, sz, &rb);			/* Get content */
 			if (rb != sz) return 0;
-			if (buffer[0][0] != 1) return 0;		/* Check coding type (LPCM) */
-			b = buffer[0][2];
+			if (buffer[0] != 1) return 0;			/* Check coding type (LPCM) */
+			b = buffer[2];
 			if (b != 1) return 0;					/* Mono Only */
-			b = buffer[0][14];
+			b = buffer[14];
 			if (b != 8) return 0;					/* resolution 8bit only */
-			f = LD_DWORD(&buffer[0][4]);			/* Check sampling freqency (8k-48k) */
+			f = LD_DWORD(&buffer[4]);				/* Check sampling freqency (8k-48k) */
 			if (f != 8000) return 4;				/* 8kHz only */
 			break;
 
@@ -156,12 +155,12 @@ void playfile(FIL* fp)
 
 	usart_write_string("loadheader : OK\r\n");
 
-	res = f_read(fp, buffer[0], 256 - (fp->fptr % 256), &rb);
+	res = f_read(fp, buffer, 256 - (fp->fptr % 256) , &rb);
 	size -= rb;
 	playcnt = rb;
 	if (res != FR_OK) return;
 
-	res = f_read(fp, buffer[1], 256, &rb);
+	res = f_read(fp, buffer+256, 256, &rb);
 	size -= rb;
 	readcnt = rb;
 	if (res != FR_OK || rb != 256) return;
@@ -183,7 +182,7 @@ void playfile(FIL* fp)
 		} while (p == r);
 
 		rsize = (size > 256) ? 256 : (UINT)size;
-		res  = f_read(fp, buffer[readb], rsize, &rb);
+		res  = f_read(fp, buffer + ((uint16_t)readb << 8), rsize, &rb);
 		if (res != FR_OK) break;
 
 		size -= rb;
