@@ -1,5 +1,9 @@
 /*----------------------------------------------------------------------------/
-/
+/  ATMega328p
+/    8MHz internal RC
+/    3.3V
+/    BOD Disable
+/    WDT Disalbe
 /----------------------------------------------------------------------------*/
 
 #include <avr/io.h>
@@ -7,32 +11,32 @@
 #include <avr/sleep.h>
 
 // PORTB
-//		7 :
-//		6 :
-//		5 : SCK
-//		4 : MISO
-//		3 : MOSI
-//		2 : SS
-//		1 : dig4
-//		0 :
+//		7 : x     : In-Hiz
+//		6 : x     : In-Hiz
+//		5 : SCK   : In-open
+//		4 : MISO  : Out-High
+//		3 : MOSI  : In-open
+//		2 : SS    : In-open
+//		1 : dig4  : Out-low
+//		0 : x     : In-Hiz
 
 // PORTC
-//		5 : e
-//		4 : d
-//		3 : dp
-//		2 : c
-//		1 : g
-//		0 :
+//		5 : e     : Out-High
+//		4 : c     : Out-High
+//		3 : dp    : Out-High
+//		2 : d     : Out-High
+//		1 : g     : Out-High
+//		0 : x     : In-Hiz
 
 // PORTD
-//		7 : b
-//		6 : dig3
-//		5 : dig2
-//		4 : f
-//		3 : a
-//		2 : dig1
-//		1 :
-//		0 :
+//		7 : b     : Out-High
+//		6 : dig3  : Out-low
+//		5 : dig2  : Out-low
+//		4 : f     : Out-High
+//		3 : a     : Out-High
+//		2 : dig1  : Out-low
+//		1 : x     : In-Hiz
+//		0 : x     : In-Hiz
 
 /*---------------------------------------------------------*/
 /* Work Area                                               */

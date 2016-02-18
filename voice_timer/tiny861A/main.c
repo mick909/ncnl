@@ -2,6 +2,32 @@
 /
 /----------------------------------------------------------------------------*/
 
+/*
+  ATtiny861a
+    12MHz external xtal clock
+    3.3V
+    BOD Disable
+    WDT Disalbe
+
+  PA0 : DI/MOSI  : In-Pullup
+  PA1 : DO/MISO  : Out-low
+  PA2 : SCK      : OUT-low
+  PA3 : MMC_CS   : Out-high
+  PA4 : LED_SS   : Out-high
+  PA5 : DIP sw1  : In-Pullup
+  PA6 : DIP sw2  : In-Pullup
+  PA7 : Sensor   : In-Open
+
+  PB0 : StartSw  : In-Pullup
+  PB1 : DispSw   : In-Pullup
+  PB2 : ModeSw   : In-Pullup
+  PB3 : SPK PWM  : Out-low
+  PB4 : xtal
+  PB5 : xtal
+  PB6 : AMP En   : Out-low
+  PB7 : reset
+ */
+
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
