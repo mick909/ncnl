@@ -9,7 +9,7 @@
 #define	_FLAGS	_SFR_IO_ADDR(GPIOR0)
 
 #define A_DO	1
-#define A_CS	4
+#define A_CS	3
 
 ;---------------------------------------------------------------------------;
 ; Simple Delay
@@ -34,11 +34,11 @@ delay_ms:
 .global delay_us
 .func delay_us
 delay_us:
-	ldi	r23, 2
-1:	dec	r23
-	brne	1b
-	sbiw	r24, 1
-	brne	delay_us
+	ldi	r23, 2			; 1
+1:	dec	r23				; 1 1
+	brne	1b			; 2 1
+	sbiw	r24, 1		; 2
+	brne	delay_us	;
 	wdr
 	ret
 .endfunc

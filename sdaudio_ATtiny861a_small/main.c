@@ -21,7 +21,7 @@
 #include <string.h>
 #include "pff.h"
 
-// FUSES = {0xE1, 0xDD, 0xFF};	/* Fuse bytes for mono: Low, High and Extended */
+// FUSES = {0xDF, 0xDD, 0xFF};	/* Fuse bytes for mono: Low, High and Extended */
 
 #define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
 
@@ -95,7 +95,6 @@ DWORD load_header (void)	/* 0:Invalid format, 1:I/O error, >=1024:Number of samp
 		case FCC('L','I','S','T') :		/* 'LIST' chunk */
 		case FCC('f','a','c','t') :		/* 'fact' chunk */
 			if (sz & 1) sz++;				/* Align chunk size */
-//			pf_lseek(Fs.fptr + sz);			/* Skip this chunk */
 			my_lseek(sz);
 			break;
 
@@ -113,20 +112,15 @@ void ramp (
 	int dir		/* 0:Ramp-down, 1:Ramp-up */
 )
 {
-	BYTE v, d, n;
-
 	if (dir) {
-		v = 0; d = 1;
-	} else {
-		v = 128; d = (BYTE)-1;
-	}
-
-	n = 128;
-	do {
-		v += d;
-		OCR1B = v;
+		OCR1B = 128;
 		delay_us(100);
-	} while (--n);
+		PORTB |=  0b01000000;
+	} else {
+		PORTB &= ~0b01000000;
+		delay_us(100);
+		OCR1B = 0;
+	}
 }
 
 static
@@ -158,7 +152,11 @@ FRESULT play (
 		FifoCt = 0; FifoRi = 0; FifoWi = 0;	/* Reset audio FIFO */
 
 		if (!TCCR1A) {				/* Enable audio out if not enabled */
+			PLLCSR = 0b00000010;
+			delay_us(110);
+			loop_until_bit_is_set(PLLCSR, PLOCK);
 			PLLCSR = 0b00000110;	/* Select PLL clock for TC1.ck */
+
 			TCCR1A = MODE ? 0b10100011 : 0b00100001;	/* Enable OC1B as PWM */
 			TCCR1B = 0b00000001;	/* Start TC1 */
 
@@ -193,8 +191,6 @@ FRESULT play (
 static
 void delay500 (void)
 {
-	wdt_reset();
-
 	TCCR0B = 0; TCCR0A = 0;	/* Stop TC0 */
 
 	if (TCCR1A) {	/* Stop TC1 if enabled */
@@ -205,9 +201,7 @@ void delay500 (void)
 	WDTCR = _BV(WDE) | _BV(WDIE) | 0b101;	/* Set WDT to interrupt mode in timeout of 0.5s */
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);	/* Enter power down mode */
 	sleep_mode();
-
-	wdt_reset();
-	WDTCR = _BV(WDE) | 0b110;				/* Set WDT to reset mode in timeout of 1s */
+	WDTCR = 0;
 }
 
 EMPTY_INTERRUPT(WDT_vect);
@@ -222,32 +216,40 @@ int main (void)
 //	BYTE org_osc = OSCCAL;
 
 	MCUSR = 0;
-	WDTCR = _BV(WDE) | 0b110;	/* Enable WDT reset in timeout of 1s */
+//	WDTCR = _BV(WDE) | 0b110;	/* Enable WDT reset in timeout of 1s */
 
-	PORTA = 0b11111001;			/* PA0: DI-In-Pullup, PA1: DO Out-low */
-	DDRA  = 0b11111110;			/* PA2: USCK: OUT-low PA4: SS Out-high*/
+	/* PA0 : DI, In-Pullup
+	 * PA1 : DO, Out-Low
+	 * PA2 : USCK, Out-Low
+	 * PA3 : MMC-SS, Out-High
+	 */
+	PORTA = 0b11111001;
+	DDRA  = 0b11111110;
 
-	PORTB = 0b11110111;
-	DDRB  = 0b11111101;			/* PB1:In-PullUp, PB3: PWM: Out */
+	/* PB0 : MOSI, In-Pullup
+	 * PB1 : MISO, In-Pullup
+	 * PB2 : SCK,  In-Pullup
+	 * PB3 : OC1B (Out-Low)
+	 * PB4 : Xtal
+	 * PB5 : Xtal
+	 * PB6 : Amp-En (Out-Low)
+	 * PB7 :
+	 */
+	PORTB = 0b10110111;
+	DDRB  = 0b11111000;
 
 	sei();
 
+	ramp(0);
+
 	for (;;) {
 		if (pf_mount(&Fs) == FR_OK) {	/* Initialize FS */
-			wdt_reset();
-//			Buff[0] = 0;
-//			if (!pf_open("osccal")) pf_read(Buff, 1, &rb);	/* Adjust frequency */
-//			OSCCAL = org_osc + Buff[0];
-
-//			res = pf_opendir(&Dir, dir = "wav");	/* Open sound file directory */
-//			if (res == FR_NO_PATH) {
 			res = pf_opendir(&Dir, dir = "");	/* Open root directory */
-//			}
-
-			while (res == FR_OK) {				/* Repeat in the dir */
+			while (res == FR_OK) {
 				res = pf_readdir(&Dir, 0);			/* Rewind dir */
 				while (res == FR_OK) {				/* Play all wav files in the dir */
-					wdt_reset();
+					loop_until_bit_is_clear(PINB, 2);
+
 					res = pf_readdir(&Dir, &Fno);		/* Get a dir entry */
 					if (res || !Fno.fname[0]) {
 						break;	/* Break on error or end of dir */
@@ -255,6 +257,11 @@ int main (void)
 					if (!(Fno.fattrib & (AM_DIR|AM_HID)) && strstr(Fno.fname, ".WAV")) {
 						res = play(dir, Fno.fname);		/* Play file */
 					}
+					TCCR0A = 0;
+					TCCR0B = 0;
+					ramp(0);
+					TCCR1A = 0;
+					TCCR1B = 0;
 				}
 			}
 		}
