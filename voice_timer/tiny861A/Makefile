@@ -13,13 +13,13 @@ DEVICE  = attiny861
 OPTIMIZE = s
 
 ### C Standard level (c89, gnu89, c99 or gnu99)
-CSTD = gnu89
+CSTD = gnu99
 
 ### Include dirs, library dirs and definitions
 LIBS	=
 LIBDIRS	=
 INCDIRS	=
-DEFS	= F_CPU=8000000 MODE=0
+DEFS	= F_CPU=12000000
 ADEFS	= $(DEFS)
 
 ### Warning contorls

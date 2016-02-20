@@ -50,15 +50,15 @@ uint8_t segData[2*4] = {0};
 // 7セグメント表示用 ==============================================
 
 const uint8_t segNumFont[2*10] = {
-//       edpcg-     b--fa---
+//       ecpdg-     b--fa---
 	 0b11001011,  0b01100111,  // 0  ABCDEF
-	 0b11111011,  0b01111111,  // 1  BC
-	 0b11001101,  0b01110111,  // 2  ABDEG
+	 0b11101111,  0b01111111,  // 1  BC
+	 0b11011001,  0b01110111,  // 2  ABDEG
 	 0b11101001,  0b01110111,  // 3  ABCDG
-	 0b11111001,  0b01101111,  // 4  BCFG
+	 0b11101101,  0b01101111,  // 4  BCFG
 	 0b11101001,  0b11100111,  // 5  ACDFG
 	 0b11001001,  0b11100111,  // 6  ACDEFG
-	 0b11111011,  0b01110111,  // 7  ABC
+	 0b11101111,  0b01110111,  // 7  ABC
 	 0b11001001,  0b01100111,  // 8  ABCDEFG
 	 0b11101001,  0b01100111   // 9  ABCDFG
 };
@@ -180,12 +180,11 @@ int main (void)
 		uint8_t rb1;
 		uint8_t rb2;
 		uint16_t rb;
-		uint32_t dat;
-		uint16_t dv;
-		uint8_t b4;
-		uint8_t b3;
-		uint8_t b2;
-		uint8_t b1;
+		uint16_t b4;
+		uint16_t b3;
+		uint16_t b2;
+		uint16_t b1;
+		uint16_t b0;
 
 		while (!(SPSR & (1<<SPIF))) {
 //			set_sleep_mode(SLEEP_MODE_IDLE);
@@ -197,23 +196,20 @@ int main (void)
  		rb1 = SPDR;
  		while (!(SPSR & (1<<SPIF))) ;
  		rb2 = SPDR;
- 		rb = (uint16_t)rb1 * 256 + (uint16_t)rb2;
+ 		rb = ((uint16_t)rb1 << 8) + ((uint16_t)rb2 & 0x0ff);
 
- 		dv = rb / 10;
- 		b1 = rb - (dv * 10);
+ 		b4 = rb / 10000;
+ 		rb -= b4 * 10000;
 
- 		rb /= 10;
- 		dv = rb / 10;
- 		b2 = rb - (dv * 10);
+ 		b3 = rb / 1000;
+ 		rb -= b3 * 1000;
 
- 		rb /= 10;
- 		dv = rb / 10;
- 		b3 = rb - (dv * 10);
+ 		b2 = rb / 100;
+ 		rb -= b2 * 100;
 
- 		rb /= 10;
- 		dv = rb / 10;
- 		b4 = rb - (dv * 10);
+ 		b1 = rb / 10;
+ 		b0 = rb - b1 * 10;
 
- 		setTime(b4,b3,b2,b1);
+ 		setTime(b3,b2,b1,b0);
 	}
 }

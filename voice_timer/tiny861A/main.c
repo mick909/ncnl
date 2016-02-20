@@ -1,7 +1,3 @@
-/*----------------------------------------------------------------------------/
-/
-/----------------------------------------------------------------------------*/
-
 /*
   ATtiny861a
     12MHz external xtal clock
@@ -31,156 +27,236 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
+#include <avr/wdt.h>
 
-#define B_STSW	2
-#define B_DISW	1
-
-// 動作状態
-#define IDLE    0
-#define DELAY   1
-#define RUNNING 2
-#define SLEEP   5
+void delay_ms (uint16_t ms);
 
 /* Low level SPI control functions */
 void init_spi (void);
 void xmit_spi_slow (uint8_t);
 
-/*---------------------------------------------------------*/
-/* Work Area                                               */
-/*---------------------------------------------------------*/
-volatile uint16_t counter;
+void setDisplay(uint16_t d)
+{
+	PORTA &= ~0b00010000;
+	xmit_spi_slow( (uint8_t)(d >> 8) );
+	xmit_spi_slow( (uint8_t)(d  & 0x0ff) );
+	PORTB |=  0b00010000;
+}
 
 /*-----------------------------------------------------------------------*/
-/* Main                                                                  */
+/* Work Area                                                             */
+/*-----------------------------------------------------------------------*/
+volatile uint16_t counter;
 
-static
-void set_10ms_timer(void)
+volatile uint8_t buzz_pos;
+volatile uint8_t buzz_cnt;
+
+/*-----------------------------------------------------------------------*/
+/* Xorshift pseudo random generator                                      */
+/*-----------------------------------------------------------------------*/
+volatile uint32_t y = 2463534242;
+
+uint32_t xorshift(void)
 {
-	TCCR0B = 0b00011011;		/* clkI/O / 64 */
-	TCCR0A = 0;
-	TIMSK  = 0;
+	y ^= (y<<13); y ^= (y >> 17); y ^= (y << 5);
+	return y;
+}
 
+/*-----------------------------------------------------------------------*/
+/* Reset Watchdog on boot                                                */
+/*-----------------------------------------------------------------------*/
+void get_mcusr(void) __attribute__((naked)) __attribute__((section(".init3")));
+void get_mcusr(void)
+{
+	MCUSR = 0;
+	wdt_disable();
+}
+
+/*-----------------------------------------------------------------------*/
+/* Interrupts                                                            */
+/*-----------------------------------------------------------------------*/
+
+EMPTY_INTERRUPT(WDT_vect);
+
+/*-----------------------------------------------------------------------*/
+/* IDLE Mode                                                             */
+/*-----------------------------------------------------------------------*/
+/*
+ * Wakeup per 16ms (WDT Interrupt)
+ * Check switch
+ * proceed random sequence
+ *
+ * Peripheral : WDT
+ */
+static
+void idle(void)
+{
+	uint8_t disp_sw = 0;
+
+	/* Powerdown {PRTIM1, PRTIM0, PRADC} */
+	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
+
+	/* Display " 0.00" */
+	setDisplay(0 + 20000);
+
+	/* Powerdown {PRTIM1, PRTIM0, PRUSI, PRADC} */
+	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRUSI) | _BV(PRADC);
+
+	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+	sei();
+
+	do {
+		/* Set WDT to interrupt mode in timeout of 16ms */
+		wdt_reset();
+		WDTCR = _BV(WDE) | _BV(WDIE) | 0b000;
+
+		/* Enter powerdown mode */
+		/* Only wakeup by WDT */
+		sleep_mode();
+
+		xorshift();
+
+		disp_sw <<= 1;
+		if (!(PINB & _BV(1))) ++disp_sw;
+	} while ( PINB & _BV(0) );
+
+	cli();
+
+	/* Disable WDT */
+	wdt_reset();
+	WDTCR = _BV(WDCE) | _BV(WDE);
+	WDTCR = 0;
+ }
+
+/*-----------------------------------------------------------------------*/
+/* VOICE Mode                                                            */
+/*-----------------------------------------------------------------------*/
+/*
+ * 1: speak voice from SD card
+ *     Peripheral : Timer0(sampling), Timer1(Fast PWM), USI(MMC IF)
+ *
+ * 2: Random Delay
+ *     Peripheral : No
+ */
+
+/*-----------------------------------------------------------------------*/
+/* RUN Mode                                                              */
+/*-----------------------------------------------------------------------*/
+/*
+ * 1: buzzer 0.3 sec
+ *     Peripheral : Timer0(count), Timer1(BuzzerPWM), USI(LED)
+ *
+ * 2: Count
+ *     Peripheral : Timer0(count), USI(LED), ADC
+ */
+static
+uint8_t run(void)
+{
+	uint8_t start_sw = 0xff;
+	uint8_t disp_sw = 0xff;
+
+	uint16_t prev = 0;
+
+	/* Powerdown {PRTIM0, PRADC} */
+	PRR = _BV(PRTIM0) | _BV(PRADC);
+
+	setDisplay(0);
+
+	/* AMP Standby */
+	OCR1B = 128;
+	TCNT1 = 0;
+	TCCR1A = _BV(COM1B1) | _BV(PWM1B);
+	TCCR1B = _BV(CS10);
+
+	delay_ms(1);
+
+	PINB = _BV(6);
+
+	delay_ms(30);
+	/***************/
+
+	/* Powerdown {} */
+	PRR = 0;
+
+	/* Set 10ms Timer Interrupt */
 	TCCR0A = _BV(TCW0);			/* 16bit operation */
+	TCCR0B = _BV(TSM) | _BV(PSR0) | _BV(CS01) | _BV(CS00);
 	TCNT0H = ((-(F_CPU / 64 / 100)) >> 8);
 	TCNT0L = ((-(F_CPU / 64 / 100)) & 0x00ff);
 
-	TIFR   = _BV(TOV0);
-	TIMSK  = _BV(TOIE0);
-
 	counter = 0;
+	buzz_cnt = buzz_pos = 0;
+
+	TIMSK = _BV(TOIE0) | _BV(TOIE1);
+	TCCR0B = _BV(CS01) | _BV(CS00);
+
+	set_sleep_mode(SLEEP_MODE_IDLE);
+	sei();
+	do {
+		sleep_mode();
+
+		if (prev != counter) {
+			prev = counter;
+			setDisplay(prev);
+		}
+	} while (prev < 30);
+
+	/* STOP BUZZER */
+	TIMSK = _BV(TOIE0);
+	OCR1B = 128;
+
+	do {
+		sleep_mode();
+
+		if (prev != counter) {
+			prev = counter;
+			setDisplay(prev);
+
+			if (prev == 33) {
+				PINB = _BV(6);
+			}
+			if (prev == 34) {
+				TCCR1A = TCCR1B = 0;
+				PRR = _BV(PRTIM1);
+			}
+			if (prev > 200) {
+				start_sw <<= 1; if (!(PINB & _BV(0))) ++start_sw;
+				disp_sw <<= 1; if (!(PINB & _BV(1))) ++disp_sw;
+			}
+		}
+	} while ( start_sw != 0b0111 && disp_sw != 0b0111);
+
+	cli();
+
+	delay_ms(1);
+
+	TIMSK = 0;
+	TCCR0A = TCCR0B = 0;
+
+	if (start_sw == 0b0111) return 1;
+	return 0;
 }
 
-static
-void init(void)
-{
-	MCUSR = 0;
-
-	PORTA = 0b11111001;			/* PA0: DI-In-Pullup, PA1: DO Out-low */
-	DDRA  = 0b11111110;			/* PA2: USCK: OUT-low PA4: SS Out-high*/
-
-	PORTB = 0b11110111;
-	DDRB  = 0b11111001;			/* PB1:In-PullUp, PB3: PWM: Out */
-
-	set_10ms_timer();
-	TCCR0B = 0b00000011;		/* Timer0 Start */
-}
-
-static
-uint8_t toIdle(void)
-{
-	// disableComparator();
-
-	return IDLE;
-}
-
-static
-uint8_t toRun(void)
-{
-	set_10ms_timer();
-	TCCR0B = 0b00000011;		/* Timer0 Start */
-
-	return RUNNING;
-}
-
-static
-void setDisplay(uint16_t d)
-{
-	PORTB &= ~0b01000000;
-	xmit_spi_slow( (uint8_t)(d >> 8) );
-	xmit_spi_slow( (uint8_t)(d  & 0x0ff) );
-	PORTB |=  0b01000000;
-}
-
+/*-----------------------------------------------------------------------*/
+/* Main                                                                  */
+/*-----------------------------------------------------------------------*/
 int main (void)
 {
-	uint16_t prev;
+	PORTA = 0b01111001;
+	DDRA  = 0b00011110;
 
-	uint8_t startsw_state = 0;
-	uint8_t dispsw_state = 0;
+	PORTB = 0b00000111;
+	DDRB  = 0b01001000;
 
-	uint8_t state = SLEEP, next = IDLE;
-
-	init();
+	delay_ms(500);
 
 	init_spi();
 
-	prev = counter;
-
-	uint16_t test = 0;
-	uint16_t test2 = 0;
-
-	sei();
-
 	for (;;) {
+		idle();
+
 		do {
-			set_sleep_mode(SLEEP_MODE_IDLE);
- 			sleep_enable();
- 			sleep_cpu();
- 			sleep_disable();
-		} while (counter == prev);
-		prev = counter;
 
-		startsw_state <<= 1;
-		if (bit_is_clear(PINB, B_STSW)) startsw_state |= 1;
-		dispsw_state <<= 1;
-		if (bit_is_clear(PINB, B_DISW)) dispsw_state |= 1;
-
-		if (++test >= 100) {
-			test = 0;
-			setDisplay(++test2);
-			if (test2 >= 20000) test2 = 0;
-		}
-
-		switch (state) {
-			case IDLE:
-			if (startsw_state == 0x7f) {
-				next = RUNNING;
-			}
-			if (dispsw_state == 0x7f) {
-				// setDisplay(0);
-			}
-			break;
-
-			case RUNNING:
-			if (startsw_state == 0x7f) {
-				state = IDLE;
-				next = RUNNING;
-			}
-			if (dispsw_state == 0x7f) {
-				next = IDLE;
-			}
-
-			setDisplay(prev);
-			break;
-		}
-
-		if (state != next) {
-			if (next == IDLE) {
-				state = toIdle();
-			}
-			if (next == RUNNING) {
-				state = toRun();
-			}
-		}
+		} while ( run() );
 	}
 }
