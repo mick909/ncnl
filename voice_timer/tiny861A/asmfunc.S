@@ -168,7 +168,7 @@ TIMER1_OVF_vect:
 	subi	r24, 1
 	sts		buzz_cnt, r24
 	brcc	9f
-	ldi		r24, 3
+	ldi		r24, 2
 	sts		buzz_cnt, r24
 
 	ldi		ZH, hi8(buzz_wave)
@@ -177,7 +177,7 @@ TIMER1_OVF_vect:
 	add		ZL, r24
 
 	subi	r24, -1
-	cpi		r24, 10
+	cpi		r24, 42
 	brcs	1f
 	ldi		r24, 0
 1:	sts		buzz_pos, r24
@@ -196,4 +196,10 @@ TIMER1_OVF_vect:
 
 buzz_wave:
 //	.byte	128, 191, 255, 0, 64, 0
-	.byte	128, 154, 255, 205, 230, 255, 26, 51, 30, 102
+//	.byte	128, 154, 255, 205, 230, 255, 26, 51, 30, 102
+
+	.byte	194, 239, 194,  56,   1,  58, 195, 255, 188,  67
+	.byte	 17,  94, 192, 216, 134,  58,  68, 149, 192, 159
+	.byte	100,  77, 106, 150, 173, 141, 104,  92, 115, 173
+	.byte	159,  98,  64, 150, 182, 140,  95, 143, 168, 100
+	.byte	 43,  74
