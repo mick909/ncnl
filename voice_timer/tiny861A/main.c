@@ -57,6 +57,7 @@ void setDisplay(uint16_t d)
 /*-----------------------------------------------------------------------*/
 volatile uint16_t counter;
 
+volatile uint16_t buzz_time;
 volatile uint8_t buzz_pos;
 volatile uint8_t buzz_cnt;
 
@@ -160,6 +161,8 @@ FRESULT play (
 		}
 
 		FifoCt = 0; FifoRi = 0; FifoWi = 0;	/* Reset audio FIFO */
+
+		delay_ms(500);
 
 		/* Start PWM Output */
 		PLLCSR = 0b00000010;
@@ -325,7 +328,7 @@ void voice_delay(void)
 			if ( !(Fno.fattrib & (AM_DIR|AM_HID))
 			    && !strcmp(Fno.fname, "STDBY.WAV") ) {
 				if (play(Fno.fname) == FR_OK) {
-					delay_count = 0;
+					delay_count = 5;
 					break;
 				}
 			}
@@ -403,29 +406,13 @@ uint8_t run(void)
 
 	counter = 0;
 	buzz_cnt = buzz_pos = 0;
+	buzz_time = (47875 * 0.3);
 
 	TIMSK = _BV(TOIE0) | _BV(TOIE1);
 	TCCR0B = _BV(CS01) | _BV(CS00);
 
 	set_sleep_mode(SLEEP_MODE_IDLE);
 	sei();
-	do {
-		uint16_t tmp;
-
-		sleep_mode();
-		cli();
-		tmp = counter;
-		sei();
-
-		if (prev != tmp) {
-			setDisplay(prev = tmp);
-		}
-	} while (prev < 30);
-
-	/* STOP BUZZER */
-	TIMSK = _BV(TOIE0);
-	OCR1B = 128;
-
 	do {
 		uint16_t tmp;
 

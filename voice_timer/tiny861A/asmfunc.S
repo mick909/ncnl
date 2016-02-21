@@ -373,6 +373,23 @@ TIMER1_OVF_vect:
 	push	ZL
 	push	ZH
 
+	sei
+
+	lds		ZH, buzz_time + 1
+	lds		ZL, buzz_time
+	sbiw	ZL, 1
+	brcc	1f
+
+	ldi		r24, 0b00000010
+	out		_SFR_IO_ADDR(TIMSK), r24
+
+	ldi		r24, 128
+	rjmp	8f
+
+1:
+	sts		buzz_time+1, ZH
+	sts		buzz_time, ZL
+
 ; --buzz_cnt
 	lds		r24, buzz_cnt
 	subi	r24, 1
@@ -388,12 +405,12 @@ TIMER1_OVF_vect:
 
 	subi	r24, -1
 	cpi		r24, 42
-	brcs	1f
+	brcs	2f
 	ldi		r24, 0
-1:	sts		buzz_pos, r24
+2:	sts		buzz_pos, r24
 
 	lpm		r24, Z
-
+8:
 	out		_SFR_IO_ADDR(OCR1B), r24
 9:
 	pop		ZH
