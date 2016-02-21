@@ -11,14 +11,14 @@
 #include <avr/sleep.h>
 
 // PORTB
-//		7 : x     : In-Hiz
-//		6 : x     : In-Hiz
+//		7 : x     : In-Pup
+//		6 : x     : In-Pup
 //		5 : SCK   : In-open
 //		4 : MISO  : Out-High
 //		3 : MOSI  : In-open
-//		2 : SS    : In-open
+//		2 : SS    : In-Pup
 //		1 : dig4  : Out-low
-//		0 : x     : In-Hiz
+//		0 : x     : In-Pup
 
 // PORTC
 //		5 : e     : Out-High
@@ -26,7 +26,7 @@
 //		3 : dp    : Out-High
 //		2 : d     : Out-High
 //		1 : g     : Out-High
-//		0 : x     : In-Hiz
+//		0 : x     : In-Pup
 
 // PORTD
 //		7 : b     : Out-High
@@ -35,8 +35,8 @@
 //		4 : f     : Out-High
 //		3 : a     : Out-High
 //		2 : dig1  : Out-low
-//		1 : x     : In-Hiz
-//		0 : x     : In-Hiz
+//		1 : x     : In-Pup
+//		0 : x     : In-Pup
 
 /*---------------------------------------------------------*/
 /* Work Area                                               */
@@ -114,7 +114,7 @@ ISR(TIMER2_COMPA_vect) {
 	PORTD &= ~0b01100100;
 
 	// 7セグフォントをピンに出力する
-	// （アノードコモンなので、フォント側は不論理）
+	// （アノードコモンなので、フォント側は負論理）
 	PORTC |= 0b00111110;
 	PORTD |= 0b10011000;
 
@@ -144,6 +144,8 @@ ISR(TIMER2_COMPA_vect) {
 
 }
 
+EMPTY_INTERRUPT(PCINT0_vect);
+
 /*-----------------------------------------------------------------------*/
 /* Main                                                                  */
 
@@ -152,14 +154,16 @@ void init(void)
 {
  	MCUSR = 0;
 
-	PORTB = 0b00010000;
+	PORTB = 0b11010101;
 	DDRB  = 0b00010010;
 
-	PORTC = 0b01111110;
+	PORTC = 0b01111111;
 	DDRC  = 0b01111110;
 
-	PORTD = 0b10011000;
+	PORTD = 0b10011011;
 	DDRD  = 0b11111100;
+
+	PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRUSART0) | _BV(ADC);
 }
 
 int main (void)
@@ -171,7 +175,12 @@ int main (void)
 	SPCR = _BV(SPE);
 	SPSR = 0;
 
+	PCMSK0 = _BV(PCINT2);
+	PCICR = _BV(PCIE0);
+
 	sei();
+
+	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
 
 	for (;;) {
 		uint8_t rb1;
@@ -183,16 +192,15 @@ int main (void)
 		uint16_t b1;
 		uint16_t b0;
 
-		while (!(SPSR & (1<<SPIF))) {
-//			set_sleep_mode(SLEEP_MODE_IDLE);
-// 			sleep_enable();
-// 			sleep_cpu();
-// 			sleep_disable();
- 		}
+		while ( PINB & _BV(2) ) {
+			sleep_mode();
+		}
 
+		while (!(SPSR & (1<<SPIF))) ;
  		rb1 = SPDR;
  		while (!(SPSR & (1<<SPIF))) ;
  		rb2 = SPDR;
+
  		rb = ((uint16_t)rb1 << 8) + ((uint16_t)rb2 & 0x0ff);
 
  		b4 = rb / 10000;

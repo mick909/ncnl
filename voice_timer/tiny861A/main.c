@@ -39,16 +39,15 @@ void delay_us (uint16_t us);
 /* Low level SPI control functions */
 void init_spi (void);
 void xmit_spi_slow (uint8_t);
+uint8_t rcv_spi_slow (void);
 
 void select_led (void);
 void deselect_led (void);
 
 void setDisplay(uint16_t d)
 {
-	select_led();
 	xmit_spi_slow( (uint8_t)(d >> 8) );
 	xmit_spi_slow( (uint8_t)(d  & 0x0ff) );
-	deselect_led();
 }
 
 /*-----------------------------------------------------------------------*/
@@ -148,6 +147,7 @@ FRESULT play (
 	char *bp;
 
 	bp = (char*)Buff;
+	*bp++ = '/';
 	while ( (*bp++ = *fn++) ) ;
 
 	res = pf_open((char*)Buff);		/* Open sound file */
@@ -158,6 +158,23 @@ FRESULT play (
 		}
 
 		FifoCt = 0; FifoRi = 0; FifoWi = 0;	/* Reset audio FIFO */
+
+		/* Start PWM Output */
+		PLLCSR = 0b00000010;
+		delay_us(110);
+		loop_until_bit_is_set(PLLCSR, PLOCK);
+		PLLCSR = 0b00000110;	/* Select PLL clock for TC1.ck */
+
+		OCR1B  = 128;
+		TCCR1A = 0b00100001;	/* Enable OC1B as PWM */
+		TCCR1B = 0b00000001;	/* Start TC1 */
+
+		delay_ms(1);
+
+		// CE = L
+		PINB = _BV(6);
+
+		delay_ms(30);
 
 		/* Sampling Interrupt Start */
 		TCCR0A = 0b00000001;
@@ -188,54 +205,6 @@ FRESULT play (
 
 	OCR1B = 128;				/* Return output to center level */
 
-	return res;
-}
-
-static
-uint8_t play_standby(void)
-{
-	uint8_t noplay = -1;
-
-	/* Powerdown {PRADC} */
-	PRR = _BV(PRADC);
-
-	if (pf_mount(&Fs) != FR_OK
-	    || pf_opendir(&Dir, "") != FR_OK) {
-		return -1;
-	}
-
-	/* Start PWM Output */
-	PLLCSR = 0b00000010;
-	delay_us(110);
-	loop_until_bit_is_set(PLLCSR, PLOCK);
-	PLLCSR = 0b00000110;	/* Select PLL clock for TC1.ck */
-
-	OCR1B  = 128;
-	TCCR1A = 0b00100001;	/* Enable OC1B as PWM */
-	TCCR1B = 0b00000001;	/* Start TC1 */
-
-	delay_ms(1);
-
-	// CE = L
-	PINB = _BV(6);
-
-	delay_ms(30);
-
-	do {
-		if (pf_readdir(&Dir, 0) != FR_OK
-		    || pf_readdir(&Dir, &Fno) != FR_OK
-		    || !Fno.fname[0]) {
-			break;
-		}
-
-		if ( !(Fno.fattrib && (AM_DIR|AM_HID))
-		    && !strcmp(Fno.fname, "STDBY.WAV") ) {
-			if (play(Fno.fname) == FR_OK) {
-				noplay = 0;
-			}
-		}
-	} while (noplay);
-
 	// CE = H
 	PINB = _BV(6);
 
@@ -243,7 +212,7 @@ uint8_t play_standby(void)
 
 	PLLCSR = TCCR1A = TCCR1B = 0;
 
-	return noplay;
+	return res;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -292,10 +261,10 @@ void idle(void)
 	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
 
 	/* Display " 0.00" */
+	select_led();
+	delay_us(100);
 	setDisplay(0 + 20000);
-
-	/* Powerdown {PRTIM1, PRTIM0, PRUSI, PRADC} */
-	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRUSI) | _BV(PRADC);
+	deselect_led();
 
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 	sei();
@@ -333,6 +302,63 @@ void idle(void)
  * 2: Random Delay
  *     Peripheral : No
  */
+static
+void voice_delay(void)
+{
+	uint8_t delay_count = 48;
+
+	/* Powerdown {PRADC} */
+	PRR = _BV(PRADC);
+
+	/* Display " 0.00" */
+	select_led();
+	delay_us(100);
+	setDisplay(0 + 20000);
+	deselect_led();
+
+	if (pf_mount(&Fs) == FR_OK
+	    && pf_opendir(&Dir, "") == FR_OK
+	    && pf_readdir(&Dir, 0) == FR_OK) {
+
+		for (;;) {
+			if (pf_readdir(&Dir, &Fno) != FR_OK
+			    || !Fno.fname[0]) {
+				break;
+			}
+
+			if ( !(Fno.fattrib & (AM_DIR|AM_HID))
+			    && !strcmp(Fno.fname, "STDBY.WAV") ) {
+				if (play(Fno.fname) == FR_OK) {
+					delay_count = 0;
+					break;
+				}
+			}
+		}
+	}
+
+	delay_count += (uint8_t)(xorshift() & 0x00f);
+
+	TIMSK = 0;
+	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+	sei();
+
+	while(delay_count-- > 0) {
+		/* Set WDT to interrupt mode in timeout of 64ms */
+		wdt_reset();
+		WDTCR = _BV(WDE) | _BV(WDIE) | 0b010;
+
+		/* Enter powerdown mode */
+		/* Only wakeup by WDT */
+		sleep_mode();
+	}
+
+	cli();
+
+	/* Disable WDT */
+	wdt_reset();
+	WDTCR = _BV(WDCE) | _BV(WDE);
+	WDTCR = 0;
+}
 
 /*-----------------------------------------------------------------------*/
 /* RUN Mode                                                              */
@@ -355,6 +381,11 @@ uint8_t run(void)
 	/* Powerdown {PRTIM0, PRADC} */
 	PRR = _BV(PRTIM0) | _BV(PRADC);
 
+	/* Display " 0.00" */
+	deselect_led();
+	rcv_spi_slow();
+	select_led();
+	delay_us(100);
 	setDisplay(0);
 
 	/* AMP Standby */
@@ -368,6 +399,8 @@ uint8_t run(void)
 
 	delay_ms(30);
 	/***************/
+
+	setDisplay(0);
 
 	/* Powerdown {} */
 	PRR = 0;
@@ -387,11 +420,15 @@ uint8_t run(void)
 	set_sleep_mode(SLEEP_MODE_IDLE);
 	sei();
 	do {
-		sleep_mode();
+		uint16_t tmp;
 
-		if (prev != counter) {
-			prev = counter;
-			setDisplay(prev);
+		sleep_mode();
+		cli();
+		tmp = counter;
+		sei();
+
+		if (prev != tmp) {
+			setDisplay(prev = tmp);
 		}
 	} while (prev < 30);
 
@@ -400,11 +437,15 @@ uint8_t run(void)
 	OCR1B = 128;
 
 	do {
-		sleep_mode();
+		uint16_t tmp;
 
-		if (prev != counter) {
-			prev = counter;
-			setDisplay(prev);
+		sleep_mode();
+		cli();
+		tmp = counter;
+		sei();
+
+		if (prev != tmp) {
+			setDisplay(prev = tmp);
 
 			if (prev == 33) {
 				PINB = _BV(6);
@@ -418,11 +459,11 @@ uint8_t run(void)
 				disp_sw <<= 1; if (!(PINB & _BV(1))) ++disp_sw;
 			}
 		}
-	} while ( start_sw != 0b0111 && disp_sw != 0b0111);
+	} while (start_sw != 0b0111 && disp_sw != 0b0111);
 
 	cli();
 
-	delay_ms(1);
+	deselect_led();
 
 	TIMSK = 0;
 	TCCR0A = TCCR0B = 0;
@@ -452,9 +493,7 @@ int main (void)
 		idle();
 
 		do {
-			play_standby();
-
-			delay_ms(1000);
+			voice_delay();
 
 		} while ( run() );
 	}

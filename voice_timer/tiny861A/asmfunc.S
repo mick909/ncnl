@@ -43,6 +43,7 @@ delay_us:
 	ret
 .endfunc
 
+
 ;---------------------------------------------------------------------------;
 ; Initialize USI
 ;
@@ -60,6 +61,7 @@ init_spi:
 	sbi 	_SFR_IO_ADDR(PORTA), A_LEDSS	; LED SS = H
 	ret
 .endfunc
+
 
 ;---------------------------------------------------------------------------;
 ; Control CS
@@ -97,6 +99,7 @@ deselect_led:
 	ret
 .endfunc
 
+
 ;---------------------------------------------------------------------------;
 ; Receive a byte
 ;
@@ -114,7 +117,66 @@ rcv_spi:
 	ret
 .endfunc
 
+
 ;---------------------------------------------------------------------------;
+; Transmit a byte
+;
+; void xmit_spi (BYTE);
+
+.global xmit_spi
+.func xmit_spi
+xmit_spi:
+	ldi		r25, 0b000100			; PA2(SCK)
+	in		r22, _SFR_IO_ADDR(PORTA)
+
+	ldi		r23, 8
+1:	bst		r24, 7				;MMC DI = data bit to be sent
+	bld		r22, A_DO			;
+	out		_SFR_IO_ADDR(PORTA), r22	;
+	lsl		r24				;/
+	out		_SFR_IO_ADDR(PINA), r25		;SCK = H
+	out		_SFR_IO_ADDR(PINA), r25		;SCK = L
+	dec		r23				;while(--r23)
+	brne	1b				;/
+
+	sbi		_SFR_IO_ADDR(PORTA), A_DO	;MMC DI = H
+	ret
+.endfunc
+
+
+;---------------------------------------------------------------------------;
+; Receive a byte (slow)
+;
+; BYTE rcv_spi_slow (void);
+
+.global rcv_spi_slow
+.func rcv_spi_slow
+rcv_spi_slow:
+	ldi	r24, 0b000100			;PA2(SCK)
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+
+	.rept 16				;Toggle SCK 16 times
+	out	_SFR_IO_ADDR(PINA), r24		;
+	nop
+	nop
+	nop
+	nop
+	nop
+	nop
+	.endr					;/
+
+	nop					;Read shift register
+	in	r24, _SFR_IO_ADDR(USIDR)	;/
+	ret
+.endfunc
+
+
+;---------------------------------------------------------------------------;;---------------------------------------------------------------------------;
 ; Transmit a byte (slow)
 ;
 ; void xmit_spi_slow (BYTE);
@@ -151,32 +213,7 @@ xmit_spi_slow:
 	ret
 .endfunc
 
-;---------------------------------------------------------------------------;
-; Transmit a byte
-;
-; void xmit_spi (BYTE);
 
-.global xmit_spi
-.func xmit_spi
-xmit_spi:
-	ldi		r25, 0b000100			; PA2(SCK)
-	in		r22, _SFR_IO_ADDR(PORTA)
-
-	ldi		r23, 8
-1:	bst		r24, 7				;MMC DI = data bit to be sent
-	bld		r22, A_DO			;
-	out		_SFR_IO_ADDR(PORTA), r22	;
-	lsl		r24				;/
-	out		_SFR_IO_ADDR(PINA), r25		;SCK = H
-	out		_SFR_IO_ADDR(PINA), r25		;SCK = L
-	dec		r23				;while(--r23)
-	brne	1b				;/
-
-	sbi		_SFR_IO_ADDR(PORTA), A_DO	;MMC DI = H
-	ret
-.endfunc
-
-;---------------------------------------------------------------------------;
 ; Read and forward a partial data block
 ;
 ; void read_blk_part (void*, WORD, WORD);
@@ -279,7 +316,6 @@ fb_exit:	/* Diacard trailing data bytes and CRC */
 ;
 ; ISR(TIMER0_COMPA_vect);
 
-
 .global TIMER0_COMPA_vect
 .func TIMER0_COMPA_vect
 TIMER0_COMPA_vect:
@@ -353,6 +389,7 @@ TIMER0_OVF_vect:
 	pop		r24				;/
 	reti
 .endfunc
+
 
 ;---------------------------------------------------------------------------;
 ; Buzzer(46.875kHz) interrupt process
