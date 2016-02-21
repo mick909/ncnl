@@ -28,19 +28,27 @@
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
 #include <avr/wdt.h>
+#include <string.h>
+#include "pff.h"
+
+#define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
 
 void delay_ms (uint16_t ms);
+void delay_us (uint16_t us);
 
 /* Low level SPI control functions */
 void init_spi (void);
 void xmit_spi_slow (uint8_t);
 
+void select_led (void);
+void deselect_led (void);
+
 void setDisplay(uint16_t d)
 {
-	PORTA &= ~0b00010000;
+	select_led();
 	xmit_spi_slow( (uint8_t)(d >> 8) );
 	xmit_spi_slow( (uint8_t)(d  & 0x0ff) );
-	PORTB |=  0b00010000;
+	deselect_led();
 }
 
 /*-----------------------------------------------------------------------*/
@@ -50,6 +58,193 @@ volatile uint16_t counter;
 
 volatile uint8_t buzz_pos;
 volatile uint8_t buzz_cnt;
+
+volatile BYTE FifoRi, FifoWi, FifoCt;	/* FIFO controls */
+
+BYTE Buff[256];		/* Wave output FIFO */
+
+FATFS Fs;			/* File system object */
+DIR Dir;			/* Directory object */
+FILINFO Fno;		/* File information */
+
+WORD rb;			/* Return value. Put this here to avoid avr-gcc's bug */
+
+/*-----------------------------------------------------------------------*/
+/* MMC Access & Play Wav                                                 */
+/*-----------------------------------------------------------------------*/
+
+static
+void my_lseek(uint16_t sz)
+{
+	while (sz) {
+		pf_read(Buff, (sz > 256) ? 256 : sz, &rb);
+		sz -= rb;
+	}
+}
+
+static
+DWORD load_header (void)	/* 0:Invalid format, 1:I/O error, >=1024:Number of samples */
+{
+	DWORD sz, f;
+	BYTE b, al = 0;
+
+	if (pf_read(Buff, 12, &rb)) return 1;	/* Load file header (12 bytes) */
+
+	if (rb != 12 || LD_DWORD(Buff+8) != FCC('W','A','V','E')) return 0;
+
+	for (;;) {
+		pf_read(Buff, 8, &rb);			/* Get Chunk ID and size */
+		if (rb != 8) return 0;
+		sz = LD_DWORD(&Buff[4]);		/* Chunk size */
+
+		switch (LD_DWORD(&Buff[0])) {	/* Switch by chunk ID */
+		case FCC('f','m','t',' ') :					/* 'fmt ' chunk */
+			if (sz & 1) sz++;						/* Align chunk size */
+			if (sz > 100 || sz < 16) return 0;		/* Check chunk size */
+			pf_read(Buff, sz, &rb);					/* Get content */
+			if (rb != sz) return 0;
+			if (Buff[0] != 1) return 0;				/* Check coding type (LPCM) */
+			b = Buff[2];
+			if (b != 1 && b != 2) return 0;			/* Check channels (1/2) */
+			GPIOR0 = al = b;						/* Save channel flag */
+			b = Buff[14];
+			if (b != 8 && b != 16) return 0;		/* Check resolution (8/16 bit) */
+			GPIOR0 |= b;							/* Save resolution flag */
+			if (b & 16) al <<= 1;
+			f = LD_DWORD(&Buff[4]);					/* Check sampling freqency (8k-48k) */
+			if (f < 8000 || f > 48000) return 4;
+			OCR0A = (BYTE)(F_CPU / 8 / f) - 1;		/* Set sampling interval */
+			break;
+
+		case FCC('d','a','t','a') :		/* 'data' chunk */
+			if (!al) return 0;							/* Check if format is valid */
+			if (sz < 1024 || (sz & (al - 1))) return 0;	/* Check size */
+			if (Fs.fptr & (al - 1)) return 0;			/* Check word alignment */
+			return sz;									/* Start to play */
+
+		case FCC('D','I','S','P') :		/* 'DISP' chunk */
+		case FCC('L','I','S','T') :		/* 'LIST' chunk */
+		case FCC('f','a','c','t') :		/* 'fact' chunk */
+			if (sz & 1) sz++;				/* Align chunk size */
+			my_lseek(sz);
+			break;
+
+		default :						/* Unknown chunk */
+			return 0;
+		}
+	}
+
+	return 0;
+}
+
+static
+FRESULT play (
+	const char *fn		/* File */
+)
+{
+	DWORD sz;
+	FRESULT res;
+	WORD btr;
+	char *bp;
+
+	bp = (char*)Buff;
+	while ( (*bp++ = *fn++) ) ;
+
+	res = pf_open((char*)Buff);		/* Open sound file */
+	if (res == FR_OK) {
+		sz = load_header();			/* Check file format and ready to play */
+		if (sz < 1024) {
+			return 255;	/* Cannot play this file */
+		}
+
+		FifoCt = 0; FifoRi = 0; FifoWi = 0;	/* Reset audio FIFO */
+
+		/* Sampling Interrupt Start */
+		TCCR0A = 0b00000001;
+		TCCR0B = 0b00000010;
+		TIMSK = _BV(OCIE0A);
+
+		sei();
+
+		pf_read(0, 512 - (Fs.fptr % 512), &rb);	/* Snip sector unaligned part */
+		sz -= rb;
+
+		do {	/* Data transfer loop */
+			btr = (sz > 1024) ? 1024 : (WORD)sz;/* A chunk of audio data */
+			res = pf_read(0, btr, &rb);	/* Forward the data into audio FIFO */
+			if (rb != 1024) break;		/* Break on error or end of data */
+
+			sz -= rb;					/* Decrease data counter */
+		} while (1); // ((PINB & 1) || ++sw != 1);
+	}
+
+	while (FifoCt) ;			/* Wait for audio FIFO empty */
+
+	cli();
+
+	/* Sampling Interrupt Stop */
+	TIMSK = 0;
+	TCCR0A = TCCR0B = 0;
+
+	OCR1B = 128;				/* Return output to center level */
+
+	return res;
+}
+
+static
+uint8_t play_standby(void)
+{
+	uint8_t noplay = -1;
+
+	/* Powerdown {PRADC} */
+	PRR = _BV(PRADC);
+
+	if (pf_mount(&Fs) != FR_OK
+	    || pf_opendir(&Dir, "") != FR_OK) {
+		return -1;
+	}
+
+	/* Start PWM Output */
+	PLLCSR = 0b00000010;
+	delay_us(110);
+	loop_until_bit_is_set(PLLCSR, PLOCK);
+	PLLCSR = 0b00000110;	/* Select PLL clock for TC1.ck */
+
+	OCR1B  = 128;
+	TCCR1A = 0b00100001;	/* Enable OC1B as PWM */
+	TCCR1B = 0b00000001;	/* Start TC1 */
+
+	delay_ms(1);
+
+	// CE = L
+	PINB = _BV(6);
+
+	delay_ms(30);
+
+	do {
+		if (pf_readdir(&Dir, 0) != FR_OK
+		    || pf_readdir(&Dir, &Fno) != FR_OK
+		    || !Fno.fname[0]) {
+			break;
+		}
+
+		if ( !(Fno.fattrib && (AM_DIR|AM_HID))
+		    && !strcmp(Fno.fname, "STDBY.WAV") ) {
+			if (play(Fno.fname) == FR_OK) {
+				noplay = 0;
+			}
+		}
+	} while (noplay);
+
+	// CE = H
+	PINB = _BV(6);
+
+	delay_ms(30);
+
+	PLLCSR = TCCR1A = TCCR1B = 0;
+
+	return noplay;
+}
 
 /*-----------------------------------------------------------------------*/
 /* Xorshift pseudo random generator                                      */
@@ -164,7 +359,6 @@ uint8_t run(void)
 
 	/* AMP Standby */
 	OCR1B = 128;
-	TCNT1 = 0;
 	TCCR1A = _BV(COM1B1) | _BV(PWM1B);
 	TCCR1B = _BV(CS10);
 
@@ -215,7 +409,7 @@ uint8_t run(void)
 			if (prev == 33) {
 				PINB = _BV(6);
 			}
-			if (prev == 34) {
+			if (prev == 37) {
 				TCCR1A = TCCR1B = 0;
 				PRR = _BV(PRTIM1);
 			}
@@ -248,6 +442,8 @@ int main (void)
 	PORTB = 0b00000111;
 	DDRB  = 0b01001000;
 
+	TIMSK = 0;
+
 	delay_ms(500);
 
 	init_spi();
@@ -256,6 +452,9 @@ int main (void)
 		idle();
 
 		do {
+			play_standby();
+
+			delay_ms(1000);
 
 		} while ( run() );
 	}

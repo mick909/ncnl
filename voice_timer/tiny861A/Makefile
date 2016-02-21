@@ -2,7 +2,7 @@
 PROJECT = cnt861a
 
 ### Source files and search directory
-CSRC    = main.c
+CSRC    = main.c mmc.c pff.c
 ASRC    = asmfunc.S
 VPATH   =
 

@@ -45,7 +45,7 @@ volatile uint16_t counter;
 
 // 7セグメントLEDに表示するデータ（フォントデータ）
 // PORTC, PORTDの順
-uint8_t segData[2*4] = {0};
+uint8_t segData[2*4] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 // 7セグメント表示用 ==============================================
 
@@ -150,19 +150,16 @@ ISR(TIMER2_COMPA_vect) {
 static
 void init(void)
 {
-  MCUSR = 0;
-//		5 : SCK
-//		4 : MISO
-//		3 : MOSI
-//		2 : SS
-	PORTB = 0b11010011;
-	DDRB  = 0b11010011;
+ 	MCUSR = 0;
 
-	PORTC = 0b11111111;
-	DDRC  = 0b11111111;
+	PORTB = 0b00010000;
+	DDRB  = 0b00010010;
 
-	PORTD = 0b11111111;
-	DDRD  = 0b11111111;
+	PORTC = 0b01111110;
+	DDRC  = 0b01111110;
+
+	PORTD = 0b10011000;
+	DDRD  = 0b11111100;
 }
 
 int main (void)
