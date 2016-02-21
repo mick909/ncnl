@@ -39,15 +39,17 @@ void delay_us (uint16_t us);
 /* Low level SPI control functions */
 void init_spi (void);
 void xmit_spi_slow (uint8_t);
-uint8_t rcv_spi_slow (void);
 
 void select_led (void);
 void deselect_led (void);
 
 void setDisplay(uint16_t d)
 {
+	select_led();
+	delay_us(100);
 	xmit_spi_slow( (uint8_t)(d >> 8) );
 	xmit_spi_slow( (uint8_t)(d  & 0x0ff) );
+	deselect_led();
 }
 
 /*-----------------------------------------------------------------------*/
@@ -261,10 +263,7 @@ void idle(void)
 	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
 
 	/* Display " 0.00" */
-	select_led();
-	delay_us(100);
 	setDisplay(0 + 20000);
-	deselect_led();
 
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 	sei();
@@ -311,10 +310,7 @@ void voice_delay(void)
 	PRR = _BV(PRADC);
 
 	/* Display " 0.00" */
-	select_led();
-	delay_us(100);
 	setDisplay(0 + 20000);
-	deselect_led();
 
 	if (pf_mount(&Fs) == FR_OK
 	    && pf_opendir(&Dir, "") == FR_OK
@@ -382,10 +378,6 @@ uint8_t run(void)
 	PRR = _BV(PRTIM0) | _BV(PRADC);
 
 	/* Display " 0.00" */
-	deselect_led();
-	rcv_spi_slow();
-	select_led();
-	delay_us(100);
 	setDisplay(0);
 
 	/* AMP Standby */
@@ -399,8 +391,6 @@ uint8_t run(void)
 
 	delay_ms(30);
 	/***************/
-
-	setDisplay(0);
 
 	/* Powerdown {} */
 	PRR = 0;
@@ -462,8 +452,6 @@ uint8_t run(void)
 	} while (start_sw != 0b0111 && disp_sw != 0b0111);
 
 	cli();
-
-	deselect_led();
 
 	TIMSK = 0;
 	TCCR0A = TCCR0B = 0;

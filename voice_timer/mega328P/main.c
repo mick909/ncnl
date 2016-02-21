@@ -172,8 +172,6 @@ int main (void)
 
 	setupled();
 
-	SPCR = _BV(SPE);
-	SPSR = 0;
 
 	PCMSK0 = _BV(PCINT2);
 	PCICR = _BV(PCIE0);
@@ -194,6 +192,9 @@ int main (void)
 
 		while ( PINB & _BV(2) ) {
 			sleep_mode();
+			SPCR = _BV(SPE);
+			SPSR = 0;
+			rb1 = SPDR;
 		}
 
 		while (!(SPSR & (1<<SPIF))) ;

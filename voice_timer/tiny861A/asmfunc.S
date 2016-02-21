@@ -144,38 +144,6 @@ xmit_spi:
 .endfunc
 
 
-;---------------------------------------------------------------------------;
-; Receive a byte (slow)
-;
-; BYTE rcv_spi_slow (void);
-
-.global rcv_spi_slow
-.func rcv_spi_slow
-rcv_spi_slow:
-	ldi	r24, 0b000100			;PA2(SCK)
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-
-	.rept 16				;Toggle SCK 16 times
-	out	_SFR_IO_ADDR(PINA), r24		;
-	nop
-	nop
-	nop
-	nop
-	nop
-	nop
-	.endr					;/
-
-	nop					;Read shift register
-	in	r24, _SFR_IO_ADDR(USIDR)	;/
-	ret
-.endfunc
-
-
 ;---------------------------------------------------------------------------;;---------------------------------------------------------------------------;
 ; Transmit a byte (slow)
 ;
