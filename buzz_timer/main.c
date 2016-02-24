@@ -19,7 +19,7 @@
   PC2 : S1       : In-PU  (PCINT10)
   PC3 : S2       : In-Pu  (PCINT11)
   PC4 : S3       : In-Pu
-  PC5 : BuzzAct  : In-PU
+  PC5 : AMP En   : Out-High
   PC6 : reset
 
   PD0 : RxD      : In-HiZ
@@ -27,7 +27,7 @@
   PD2 : LED-f    : Out-Low
   PD3 : LED-CA1  ; Out-Low
   PD4 : LED-a    : Out-Low
-  PD5 : BuzzEn   : Out-High
+  PD5 : BuzzPWM  : Out-Low (OC0B)
   PD6 : LED-CA2  : Out-Low
   PD7 : LED-CA3  : Out-Low
  */
@@ -53,7 +53,7 @@ volatile uint8_t count_num;
 /* Segmented digit's font data : PORTB, PORTC, PORTD */
 volatile uint8_t seg_data[3*4] = {0};
 
-static const uint8_t seg_font[3*10] = {
+const uint8_t seg_font[3*10] = {
 /*   --D.CG-B     -------E     ---A-F--        */
   ~0b00101001, ~0b00000001, ~0b00010100,  /* 0 */
   ~0b00001001, ~0b00000000, ~0b00000000,  /* 1 */
@@ -69,6 +69,13 @@ static const uint8_t seg_font[3*10] = {
 
 volatile uint8_t row = 0;
 volatile uint8_t *sdrp = seg_data;
+
+volatile uint16_t buzz_time;
+volatile uint8_t buzz_pos;
+volatile uint8_t buzz_cnt;
+volatile uint8_t buzz_shut;
+
+volatile uint8_t ac_blank;
 
 /*-----------------------------------------------------------------------*/
 /* Xorshift pseudo random generator                                      */
@@ -105,8 +112,16 @@ ISR(PCINT1_vect) {
 ISR(TIMER2_COMPA_vect) {
   if (--count5 == 0) {
     count5 = 5;
-    if (++counter == 20000) {
-      counter = 20000;
+    counter += 1;
+  }
+
+  if (buzz_shut) {
+    PORTC |= _BV(5);
+    if (--buzz_shut == 0) {
+      TCCR0A = TCCR0B = 0;
+      TIMSK0 = 0;
+      PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI)
+        | _BV(PRUSART0) | _BV(PRADC);
     }
   }
 
@@ -180,12 +195,9 @@ void set_time(uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3, uint8_t d4)
 }
 
 static
-void set_pos_count(uint8_t pos)
+void set_count(uint16_t c)
 {
-  uint16_t c;
   uint8_t d0, d1, d2, d3, d4;
-
-  c = counts[pos];
 
   d4 = c / 10000;
   c -= d4 * 10000;
@@ -231,8 +243,11 @@ uint8_t sleep(void)
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 
   do {
+    cli();
     wdt_reset();
-    WDTCSR = _BV(WDCE) | _BV(WDIE) | 0b101;    /* 0.5s */
+    WDTCSR = _BV(WDCE) | _BV(WDE);
+    WDTCSR = _BV(WDIE) | 0b110;    /* 1s */
+    sei();
 
     sleep_mode();
 
@@ -240,21 +255,16 @@ uint8_t sleep(void)
 
     /* blink dot per 0.5ms */
     PINB = 0b00010000;
-  } while ( PINC & 0b00001100 );
+  } while ( (PINC & _BV(2)) && (PINC & _BV(3)) );
 
+  cli();
   wdt_reset();
-  WDTCSR = _BV(WDCE);
-
-  PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI)
-        | _BV(PRUSART0) | _BV(PRADC);
-
-  OCR2A  = 250-1;   /* (F_CPU / 8 / 8 / 1000 * 2) */
-  TCCR2A = 0b010;
-  TCCR2B = 0b010;
-  TIMSK2 = _BV(TOIE2);
+  WDTCSR = _BV(WDCE) | _BV(WDE);
+  WDTCSR = 0;
+  sei();
 
   /* if s1 pushed exit idle loop, else continue idle */
-  return (PINC & 0b00000100);
+  return (PINC & _BV(2));
 }
 
 /*-----------------------------------------------------------------------*/
@@ -265,16 +275,25 @@ uint8_t idle(void)
 {
   uint16_t prev;
   uint8_t count_pos;
-  uint8_t s2_status = 0;
+  uint8_t s2_status = 0xff;
 
-  set_sleep_mode(SLEEP_MODE_PWR_SAVE);
+  PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI)
+        | _BV(PRUSART0) | _BV(PRADC);
+
+  /* TC2 : 2ms Interval Interrupt */
+  OCR2A  = 250-1;   /* (F_CPU / 8 / 1000 * 2) */
+  TCCR2A = 0b010;
+  TCCR2B = 0b010;
+  TIMSK2 = _BV(OCIE2A);
+
+  set_sleep_mode(SLEEP_MODE_EXT_STANDBY);
 
   cli();
   counter = 0;
   sei();
   prev = 0;
   count_pos = (count_num) ? 1 : 0;
-  set_pos_count(count_pos);
+  set_count(counts[count_pos]);
 
   /* PCINT enable (S1 only) */
   PCICR  = _BV(PCIE1);
@@ -295,8 +314,8 @@ uint8_t idle(void)
       xorshift();
 
       s2_status <<= 1;
-      if ( PINC & 0b00001000 ) ++s2_status;
-      if (s2_status == 0b11111110) {
+      if ( PINC & _BV(3) ) ++s2_status;
+      if (s2_status == 1) {
         /* first H->L trigger */
         prev = 0;
         cli();
@@ -305,13 +324,162 @@ uint8_t idle(void)
       }
 
       /* 3min -> enter deep sleep */
-      if (prev >= 18000) {
+      if (prev >= 3000) {
         return 1;
       }
     }
-  } while ( PINC & 0b00000100 );
+  } while ( PINC & _BV(2) );
 
   return 0;
+}
+
+/*-----------------------------------------------------------------------*/
+/* DELAY Mode                                                            */
+/*-----------------------------------------------------------------------*/
+static
+void delay(void)
+{
+  uint8_t count;
+
+  TIMSK2 = 0;
+  TCCR2A = TCCR2B = 0;
+
+  PRR = _BV(PRTWI) | _BV(PRTIM2) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI)
+        | _BV(PRUSART0) | _BV(PRADC);
+
+  /* ---- */
+  PORTB |=  0b00111111;
+  PORTC |=  0b00000001;
+  PORTD |=  0b11011100;
+  PORTB &= ~0b00000100;
+
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+
+  /* 64ms * 48 = 3.072sec */
+  /* 64ms * 24 = 1.536sec */
+  count = 48 + (uint8_t)(xorshift() % 25);
+
+  do {
+    cli();
+    wdt_reset();
+    WDTCSR = _BV(WDCE) | _BV(WDE);
+    WDTCSR = _BV(WDIE) | 0b010;    /* 64ms */
+    sei();
+
+    sleep_mode();
+
+    xorshift();
+  } while ( --count > 0);
+
+  cli();
+  wdt_reset();
+  WDTCSR = _BV(WDCE) | _BV(WDE);
+  WDTCSR = 0;
+  sei();
+}
+
+/*-----------------------------------------------------------------------*/
+/* RUN Mode                                                              */
+/*-----------------------------------------------------------------------*/
+static
+uint8_t run(void)
+{
+  uint8_t start_sw = 0xff;
+  uint8_t disp_sw = 0xff;
+
+  uint16_t prev = 0;
+
+  TIMSK2 = 0;
+
+  set_time(0,0,0,0,0);
+
+  /* 8MHz Clock */
+  cli();
+  CLKPR = _BV(CLKPCE);
+  CLKPR = 0b0000;
+
+  counter = 0;
+  buzz_cnt = buzz_pos = buzz_shut = ac_blank = count_num = 0;
+  buzz_time = 47875 * 0.3;
+  sei();
+
+  PRR = _BV(PRTWI) | _BV(PRTIM1) | _BV(PRSPI)
+        | _BV(PRUSART0) | _BV(PRADC);
+
+  /* PWM Center */
+  OCR0B = 128;
+  TCCR0A = _BV(COM0B1) | _BV(WGM01) | _BV(WGM00);
+  TCCR0B = _BV(CS00);
+
+  delay_ms(1);
+
+  PORTC &= ~(_BV(5));
+
+  delay_ms(30);
+
+  /* TC2 : 2ms Interval Interrupt */
+  OCR2A  = 250-1;   /* (F_CPU / 8 / 1000 * 2) */
+  TCCR2A = 0b010;
+  TCCR2B = 0;
+
+  /* Reset TC2 Counter (With Prescaler) */
+  TCNT2 = 0;
+  GTCCR = _BV(PSRASY);
+
+  /* Start Buzzer & Timer */
+  TIMSK0 = _BV(TOIE0);
+  TCCR2B = 0b100;
+  TIMSK2 = _BV(OCIE2A);
+
+  set_sleep_mode(SLEEP_MODE_IDLE);
+
+  do {
+    uint16_t tmp;
+    uint8_t num;
+
+    sleep_mode();
+    cli();
+    tmp = counter;
+    num = count_num;
+    sei();
+
+    if (prev != tmp) {
+      if (num == 0) {
+        set_count(tmp);
+      } else if (prev < counts[num]) {
+        set_count(counts[num]);
+      }
+      prev = tmp;
+
+      if (num == 9) break;
+
+      if (tmp > 200) {
+        start_sw <<= 1;
+        if (!(PINC & _BV(2))) ++start_sw;
+        disp_sw <<= 1;
+        if (!(PINC & _BV(3))) ++ disp_sw;
+      }
+
+      if (tmp > 18000) return !sleep();
+    }
+  } while ( start_sw != 1 && disp_sw != 1);
+
+  TIMSK2 = 0;
+  TCCR2A = TCCR2B = 0;
+
+  TIMSK0 = 0;
+  TCCR0A = TCCR0B = 0;
+
+  PORTC |= _BV(5);
+  PORTD &= ~(_BV(5));
+
+  /* 1MHz Clock */
+  cli();
+  CLKPR = _BV(CLKPCE);
+  CLKPR = 0b0011;
+  sei();
+
+  return start_sw == 1;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -323,9 +491,9 @@ int main (void)
   DDRB  = 0b00111111;
 
   PORTC = 0b00111100;
-  DDRC  = 0b00000001;
+  DDRC  = 0b00100001;
 
-  PORTD = 0b00100000;
+  PORTD = 0b00000000;
   DDRD  = 0b11111110;
 
   set_time(0,0,0,0,0);
@@ -340,7 +508,7 @@ int main (void)
   OCR2A  = 250-1;   /* (F_CPU / 8 / 1000 * 2) */
   TCCR2A = 0b010;
   TCCR2B = 0b010;
-  TIMSK2 = _BV(TOIE2);
+  TIMSK2 = _BV(OCIE2A);
 
   sei();
 
@@ -349,5 +517,8 @@ int main (void)
     do {
     } while (idle() && sleep());
 
+    do {
+      if (PINC & _BV(4)) delay();
+    } while (run());
   }
 }
