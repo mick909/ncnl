@@ -107,17 +107,17 @@ set_display:
 .func enable_ac
 enable_ac:
 	/* ACBG, ACI clear, H->L trigger */
-	ldi		r24, 0b01010010
-	out		_SFR_IO_ADDR(ACSR), r24		/* ACIE = 0 */
+	ldi		r25, 0b01010010
+	out		_SFR_IO_ADDR(ACSR), r25		/* ACIE = 0 */
 
-	ldi		r24, 0b01000000
-	sts		ADCSRB, r24					/* ACME = 0 */
+	ldi		r25, 0b01000000
+	sts		ADCSRB, r25					/* ACME = 0 */
 
-	ldi		r24, 1
-	sts		ADMUX, r24	/* ADC1 -> AIN-NEG */
+	ldi		r25, 1
+	sts		ADMUX, r25					/* ADC1 -> AIN-NEG */
 
-	ldi		r24, 0b01011010				/* ACIE = 1 */
-	out		_SFR_IO_ADDR(ACSR), r24
+	ldi		r25, 0b01011010				/* ACIE = 1 */
+	out		_SFR_IO_ADDR(ACSR), r25
 	ret
 .endfunc
 
