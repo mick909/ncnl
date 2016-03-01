@@ -239,7 +239,7 @@ uint8_t idle(void)
       }
 
       /* 3min -> enter deep sleep */
-      if (prev >= 3000 / 2) {
+      if (prev >= 18000 / 2) {
         return 1;
       }
     }
@@ -284,7 +284,9 @@ void delay(void)
 
   set_sleep_mode(SLEEP_MODE_EXT_STANDBY);
 
-  count = (300 + (uint16_t)(xorshift() % 150)) / 2;
+  count = (150
+           + (uint16_t)(xorshift() & 0x3f)    /* 0 - 63 */
+           + (uint16_t)(xorshift() & 0x0f));  /* 0 - 15 */
 
   do {
     sleep_mode();
@@ -303,6 +305,7 @@ uint8_t run(void)
 {
   uint8_t start_sw = 0xff;
   uint8_t disp_sw = 0xff;
+  uint8_t blink = 50;
 
   uint16_t prev = 0;
 
@@ -368,8 +371,9 @@ uint8_t run(void)
         break;
       }
 
-      if (!(tmp % 50)) {
+      if (--blink == 0) {
         dot = 1 - dot;
+        blink = 50;
       }
 
       if (tmp == 5) {
@@ -383,7 +387,7 @@ uint8_t run(void)
         if (!(PINC & _BV(3))) ++ disp_sw;
       }
 
-      if (tmp > 30000) return !sleep();
+      if (tmp > 18000) return !sleep();
     }
   } while ( start_sw != 1 && disp_sw != 1);
 
