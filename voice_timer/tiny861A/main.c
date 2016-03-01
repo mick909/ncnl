@@ -28,7 +28,6 @@
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
 #include <avr/wdt.h>
-#include <string.h>
 #include "pff.h"
 
 #define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
@@ -60,14 +59,15 @@ volatile uint16_t counter;
 volatile uint16_t buzz_time;
 volatile uint8_t buzz_pos;
 volatile uint8_t buzz_cnt;
+volatile uint8_t buzz_shut;
 
 volatile BYTE FifoRi, FifoWi, FifoCt;	/* FIFO controls */
+
+uint16_t counts[10];
 
 BYTE Buff[256];		/* Wave output FIFO */
 
 FATFS Fs;			/* File system object */
-DIR Dir;			/* Directory object */
-FILINFO Fno;		/* File information */
 
 WORD rb;			/* Return value. Put this here to avoid avr-gcc's bug */
 
@@ -147,13 +147,8 @@ FRESULT play (
 	DWORD sz;
 	FRESULT res;
 	WORD btr;
-	char *bp;
 
-	bp = (char*)Buff;
-	*bp++ = '/';
-	while ( (*bp++ = *fn++) ) ;
-
-	res = pf_open((char*)Buff);		/* Open sound file */
+	res = pf_open(fn);		/* Open sound file */
 	if (res == FR_OK) {
 		sz = load_header();			/* Check file format and ready to play */
 		if (sz < 1024) {
@@ -177,7 +172,7 @@ FRESULT play (
 		delay_ms(1);
 
 		// CE = L
-		PINB = _BV(6);
+		PORTB |= _BV(6);
 
 		delay_ms(30);
 
@@ -211,7 +206,7 @@ FRESULT play (
 	OCR1B = 128;				/* Return output to center level */
 
 	// CE = H
-	PINB = _BV(6);
+	PORTB &= ~(_BV(6));
 
 	delay_ms(30);
 
@@ -315,24 +310,8 @@ void voice_delay(void)
 	/* Display " 0.00" */
 	setDisplay(0 + 20000);
 
-	if (pf_mount(&Fs) == FR_OK
-	    && pf_opendir(&Dir, "") == FR_OK
-	    && pf_readdir(&Dir, 0) == FR_OK) {
-
-		for (;;) {
-			if (pf_readdir(&Dir, &Fno) != FR_OK
-			    || !Fno.fname[0]) {
-				break;
-			}
-
-			if ( !(Fno.fattrib & (AM_DIR|AM_HID))
-			    && !strcmp(Fno.fname, "STDBY.WAV") ) {
-				if (play(Fno.fname) == FR_OK) {
-					delay_count = 5;
-					break;
-				}
-			}
-		}
+	if (pf_mount(&Fs) == FR_OK && play("/STDBY.WAV") == FR_OK) {
+		delay_count = 5;
 	}
 
 	delay_count += (uint8_t)(xorshift() & 0x00f);
@@ -390,7 +369,7 @@ uint8_t run(void)
 
 	delay_ms(1);
 
-	PINB = _BV(6);
+	PORTB |= _BV(6);
 
 	delay_ms(30);
 	/***************/
@@ -405,7 +384,7 @@ uint8_t run(void)
 	TCNT0L = ((-(F_CPU / 64 / 100)) & 0x00ff);
 
 	counter = 0;
-	buzz_cnt = buzz_pos = 0;
+	buzz_cnt = buzz_pos = buzz_shut = 0;
 	buzz_time = (47875 * 0.3);
 
 	TIMSK = _BV(TOIE0) | _BV(TOIE1);
@@ -424,13 +403,6 @@ uint8_t run(void)
 		if (prev != tmp) {
 			setDisplay(prev = tmp);
 
-			if (prev == 33) {
-				PINB = _BV(6);
-			}
-			if (prev == 37) {
-				TCCR1A = TCCR1B = 0;
-				PRR = _BV(PRTIM1);
-			}
 			if (prev > 200) {
 				start_sw <<= 1; if (!(PINB & _BV(0))) ++start_sw;
 				disp_sw <<= 1; if (!(PINB & _BV(1))) ++disp_sw;
