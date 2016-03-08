@@ -16,7 +16,7 @@
 //		5 : SCK   : In-open
 //		4 : MISO  : Out-High
 //		3 : MOSI  : In-open
-//		2 : SS    : In-Pup
+//		2 : SS    : In-Pup	<= PCINT2
 //		1 : dig4  : Out-low
 //		0 : x     : In-Pup
 
@@ -38,18 +38,25 @@
 //		1 : x     : In-Pup
 //		0 : x     : In-Pup
 
+void set_display (uint16_t);
+uint8_t read_spi (void);
+
 /*---------------------------------------------------------*/
 /* Work Area                                               */
 /*---------------------------------------------------------*/
-volatile uint16_t counter;
-
 // 7セグメントLEDに表示するデータ（フォントデータ）
 // PORTC, PORTDの順
-uint8_t segData[2*4] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+uint8_t seg_data[2*4] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+
+volatile uint8_t row = 0;
+volatile uint8_t *sdrp = seg_data;
+
+// volatile uint8_t spi_rd;
+// volatile uint8_t spi_rf;
 
 // 7セグメント表示用 ==============================================
 
-const uint8_t segNumFont[2*10] = {
+const uint8_t seg_font[2*10] = {
 //       ecpdg-     b--fa---
 	 0b11001011,  0b01100111,  // 0  ABCDEF
 	 0b11101111,  0b01111111,  // 1  BC
@@ -63,94 +70,10 @@ const uint8_t segNumFont[2*10] = {
 	 0b11101001,  0b01100111   // 9  ABCDFG
 };
 
-static
-void setupled(void)
-{
-	// Timer2設定
-	// LEDのダイナミック点灯(4ms)
-	// CTC動作
-	// 8MHz / 1024 / 31 = 252Hz (4ms)
-	TCCR2A = 0;
-	TCCR2B = 0;
-	OCR2A = 30;
-	TCCR2A = 0b00000010;
-	TCCR2B = 0b00001111;
-	TIMSK2 = 0b00000010;
-}
-
-// 7セグメント表示用配列に、数値のフォントを設定する
-void setTime(uint8_t b4, uint8_t b3, uint8_t b2, uint8_t b1) {
-	uint8_t* dp = segData;
-
-	volatile const uint8_t* fp = segNumFont + (b1 * 2);
-	*dp++ = *fp++;
-	*dp++ = *fp;
-
-	fp = segNumFont + (b2 * 2);
-	*dp++ = *fp++;
-	*dp++ = *fp;
-
-	fp = segNumFont + (b3 * 2);
-	*dp++ = *fp++ & (~0b00001000);
-	*dp++ = *fp;
-
-	if (b4 != 0) {
-		fp = segNumFont + (b4 * 2);
-		*dp++ = *fp++;
-		*dp   = *fp;
-	} else {
-		*dp++ = 0xff;
-		*dp   = 0xff;
-	}
-}
-
-// Timer2割り込み
-ISR(TIMER2_COMPA_vect) {
-	static uint8_t row = 0;
-	static uint8_t *sdrp = segData;
-
-	// DIG-1〜4をオフ
-	PORTB &= ~0b00000010;
-	PORTD &= ~0b01100100;
-
-	// 7セグフォントをピンに出力する
-	// （アノードコモンなので、フォント側は負論理）
-	PORTC |= 0b00111110;
-	PORTD |= 0b10011000;
-
-	PORTC &= *sdrp++;
-	PORTD &= *sdrp++;
-
-	// 該当の桁のアノードにHigh出力
-	// ついでに2ndBeep設定中の桁の点滅と、2桁目のピリオドの点滅を処理
-	switch (row++) {
-	case 0:
-		PORTB |= 0b00000010;
-		break;
-	case 1:
-		PORTD |= 0b01000000;
-		break;
-	case 2:
-		PORTD |= 0b00100000;
-		break;
-	case 3:
-		PORTD |= 0b00000100;
-
-		// 桁をオーバーラップする（注意！）
-		row = 0;
-		sdrp = segData;
-		break;
-	}
-
-}
-
-EMPTY_INTERRUPT(PCINT0_vect);
 
 /*-----------------------------------------------------------------------*/
 /* Main                                                                  */
-
-static
-void init(void)
+int main (void)
 {
  	MCUSR = 0;
 
@@ -163,59 +86,50 @@ void init(void)
 	PORTD = 0b10011011;
 	DDRD  = 0b11111100;
 
-	PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRUSART0) | _BV(ADC);
-}
-
-int main (void)
-{
-	init();
-
-	setupled();
+	PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI) | _BV(PRUSART0) | _BV(ADC);
 
 
+	// Timer2設定
+	// LEDのダイナミック点灯(4ms)
+	// CTC動作
+	// 8MHz / 1024 / 31 = 252Hz (4ms)
+	TCCR2A = 0;
+	TCCR2B = 0;
+	OCR2A = 30;
+	TCCR2A = 0b00000010;
+	TCCR2B = 0b00001111;
+	TIMSK2 = 0b00000010;
+
+	// SS pin interrupt
 	PCMSK0 = _BV(PCINT2);
 	PCICR = _BV(PCIE0);
 
 	sei();
 
-	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
-
 	for (;;) {
-		uint8_t rb1;
-		uint8_t rb2;
-		uint16_t rb;
-		uint16_t b4;
-		uint16_t b3;
-		uint16_t b2;
-		uint16_t b1;
-		uint16_t b0;
+		uint8_t rb1, rb2;
 
-		while ( PINB & _BV(2) ) {
+		set_sleep_mode(SLEEP_MODE_PWR_SAVE);
+		do {
 			sleep_mode();
-			SPCR = _BV(SPE);
-			SPSR = 0;
-			rb1 = SPDR;
-		}
+		} while ( PINB & _BV(2) );
 
-		while (!(SPSR & (1<<SPIF))) ;
- 		rb1 = SPDR;
- 		while (!(SPSR & (1<<SPIF))) ;
- 		rb2 = SPDR;
+		cli();
 
- 		rb = ((uint16_t)rb1 << 8) + ((uint16_t)rb2 & 0x0ff);
+		PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRUSART0) | _BV(ADC);
+		SPCR = (1<<SPE);
 
- 		b4 = rb / 10000;
- 		rb -= b4 * 10000;
 
- 		b3 = rb / 1000;
- 		rb -= b3 * 1000;
+		rb1 = read_spi();
+		rb2 = read_spi();
 
- 		b2 = rb / 100;
- 		rb -= b2 * 100;
+		SPCR = 0;
+		PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI) | _BV(PRUSART0) | _BV(ADC);
 
- 		b1 = rb / 10;
- 		b0 = rb - b1 * 10;
+		sei();
 
- 		setTime(b3,b2,b1,b0);
+ 		if (rb2 >= 0xE0) continue;
+
+ 		set_display( (((uint16_t)rb2)<<8) + (uint16_t)rb1);
 	}
 }

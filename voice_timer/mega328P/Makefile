@@ -3,7 +3,7 @@ PROJECT = spiled
 
 ### Source files and search directory
 CSRC    = main.c
-ASRC    =
+ASRC    = asmfunc.S
 VPATH   =
 
 ### Target device

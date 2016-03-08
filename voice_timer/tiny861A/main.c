@@ -45,9 +45,9 @@ void deselect_led (void);
 void setDisplay(uint16_t d)
 {
 	select_led();
-	delay_us(100);
-	xmit_spi_slow( (uint8_t)(d >> 8) );
+	delay_us(10);
 	xmit_spi_slow( (uint8_t)(d  & 0x0ff) );
+	xmit_spi_slow( (uint8_t)(d >> 8) );
 	deselect_led();
 }
 
@@ -261,7 +261,7 @@ void idle(void)
 	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
 
 	/* Display " 0.00" */
-	setDisplay(0 + 20000);
+	setDisplay(0);
 
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 	sei();
@@ -308,7 +308,7 @@ void voice_delay(void)
 	PRR = _BV(PRADC);
 
 	/* Display " 0.00" */
-	setDisplay(0 + 20000);
+	setDisplay(0);
 
 	if (pf_mount(&Fs) == FR_OK && play("/STDBY.WAV") == FR_OK) {
 		delay_count = 5;
@@ -355,6 +355,8 @@ uint8_t run(void)
 	uint8_t disp_sw = 0xff;
 
 	uint16_t prev = 0;
+	uint8_t count50 = 50;
+	uint8_t dot = 1;
 
 	/* Powerdown {PRTIM0, PRADC} */
 	PRR = _BV(PRTIM0) | _BV(PRADC);
@@ -401,7 +403,13 @@ uint8_t run(void)
 		sei();
 
 		if (prev != tmp) {
-			setDisplay(prev = tmp);
+			prev = tmp;
+
+			if (--count50 == 0) {
+				count50 = 50;
+				dot ^= 1;
+			}
+			setDisplay(tmp + (dot?0:20000));
 
 			if (prev > 200) {
 				start_sw <<= 1; if (!(PINB & _BV(0))) ++start_sw;

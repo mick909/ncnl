@@ -160,16 +160,16 @@ xmit_spi_slow:
 	bld		r22, A_DO			;
 	out		_SFR_IO_ADDR(PORTA), r22	;
 
-	.rept 6
 	nop
-	.endr
+	nop
 
 	lsl		r24				;/
 	out		_SFR_IO_ADDR(PINA), r25		;SCK = H
 
-	.rept 6
 	nop
-	.endr
+	nop
+	nop
+	nop
 
 	out		_SFR_IO_ADDR(PINA), r25		;SCK = L
 
