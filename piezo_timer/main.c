@@ -5,6 +5,10 @@
     BOD Disable
     WDT Disalbe
 
+    LFUSE = F7
+    HFUSE = DF
+    EFUSE = FF
+
   PB0 : LED-b    : Out-Low
   PB1 : LED-CA4  : Out-Low
   PB2 : LED-g    : Out-Low
@@ -19,15 +23,15 @@
   PC2 : S1       : In-PU  (PCINT10)
   PC3 : S2       : In-Pu  (PCINT11)
   PC4 : S3       : In-Pu
-  PC5 : NC       : In-HiZ
+  PC5 : NC       : OUT-Low
   PC6 : reset
 
-  PD0 : RxD      : In-HiZ
-  PD1 : TxD      : Out-Low
+  PD0 : T1      : In-Pu
+  PD1 : T2      : In-Pu
   PD2 : LED-f    : Out-Low
   PD3 : LED-CA1  ; Out-Low
   PD4 : LED-a    : Out-Low
-  PD5 : Buzz     : Out-High
+  PD5 : Buzz     : Out-Low (OC0B)
   PD6 : LED-CA2  : Out-Low
   PD7 : LED-CA3  : Out-Low
  */
@@ -72,6 +76,8 @@ volatile uint8_t row = 0;
 volatile uint8_t *sdrp = seg_data;
 
 volatile uint8_t ac_blank;
+
+const uint16_t tone[4] = {3500, 4400, 4800, 4000};
 
 /*-----------------------------------------------------------------------*/
 /* Xorshift pseudo random generator                                      */
@@ -320,8 +326,7 @@ uint8_t run(void)
   CLKPR = 0b0000;
   sei();
 
-  PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI)
-        | _BV(PRUSART0);
+  PRR = _BV(PRTWI) | _BV(PRTIM1) | _BV(PRSPI) | _BV(PRUSART0);
 
   /* TC2 : 2ms Interval Interrupt */
   OCR2A  = 250-1;   /* (F_CPU / 64 / 1000 * 2) */
@@ -332,13 +337,19 @@ uint8_t run(void)
   TCNT2 = 0;
   GTCCR = _BV(PSRASY);
 
+  TCCR0A = _BV(COM0B1) | _BV(WGM01) | _BV(WGM00);
+  TCCR0B = 0;
+  OCR0A = (F_CPU / 64 / tone[PIND & 0x03]) - 1;
+  OCR0B = (F_CPU / 64 / tone[PIND & 0x03] / 2) - 1;
+  TCNT0 = 0;
+
   cli();
   count5 = 5;
   counter = 0;
   ac_blank = count_num = 0;
+  TCCR0B = _BV(WGM02) | 0b011;
   sei();
 
-  PORTD &= ~(_BV(5));
   TCCR2B = 0b100;
   TIMSK2 = _BV(OCIE2A);
 
@@ -354,10 +365,21 @@ uint8_t run(void)
     sleep_mode();
     cli();
     tmp = counter;
+/*
+    if (tmp == 20000) {
+      counter = tmp = 10000;
+    }
+*/
     num = count_num;
     sei();
 
     if (prev != tmp) {
+      if (tmp == 30) {
+        TCCR0A = TCCR0B = 0;
+        PRR = _BV(PRTWI) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI) | _BV(PRUSART0);
+        PORTD &= ~(_BV(5));
+      }
+
       if (num == 0) {
         set_display(tmp);
       } else if (prev <= counts[num]) {
@@ -376,10 +398,6 @@ uint8_t run(void)
         blink = 50;
       }
 
-      if (tmp == 5) {
-        PORTD |= (_BV(5));
-      }
-
       if (tmp > 200) {
         start_sw <<= 1;
         if (!(PINC & _BV(2))) ++start_sw;
@@ -394,7 +412,10 @@ uint8_t run(void)
   TIMSK2 = 0;
   TCCR2A = TCCR2B = 0;
 
-  PORTD |= (_BV(5));
+  TCCR0A = TCCR0B = 0;
+  PRR = _BV(PRTWI) | _BV(PRTIM2) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI)
+        | _BV(PRUSART0) | _BV(PRADC);
+  PORTD &= ~(_BV(5));
 
   return start_sw == 1;
 }
@@ -408,10 +429,10 @@ int main (void)
   DDRB  = 0b00111111;
 
   PORTC = 0b00011100;
-  DDRC  = 0b00000001;
+  DDRC  = 0b00100001;
 
-  PORTD = 0b00100000;
-  DDRD  = 0b11111110;
+  PORTD = 0b00000011;
+  DDRD  = 0b11111100;
 
   DIDR0  = 0b00000010;
 

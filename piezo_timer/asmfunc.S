@@ -189,7 +189,7 @@ TIMER2_COMPA_vect:
 ;  }
 	lds		r24, count5
 	subi	r24, 1
-	brcc	1f
+	brne	1f
 
 	lds		r24, counter
 	lds		r25, counter+1
@@ -197,6 +197,8 @@ TIMER2_COMPA_vect:
 	sbci	r25, -1
 	sts		counter, r24
 	sts		counter+1, r25
+
+	sbi		_SFR_IO_ADDR(PINC), 5
 
 	ldi		r24, 5
 
