@@ -106,7 +106,11 @@ void get_mcusr(void)
 
 EMPTY_INTERRUPT(WDT_vect);
 
-ISR(PCINT1_vect) {
+volatile uint8_t pinc_tmp;
+
+ISR(PCINT1_vect)
+{
+  pinc_tmp = PINC;
   PCICR = 0;
   PCMSK1 = 0;
 }
@@ -117,15 +121,13 @@ ISR(PCINT1_vect) {
 static
 uint8_t sleep(void)
 {
-  uint8_t tmp;
-
   TIMSK2 = 0;
   TCCR2A = TCCR2B = 0;
 
-  /* 1/128 Clock */
+  /* 1/32 Clock */
   cli();
   CLKPR = _BV(CLKPCE);
-  CLKPR = 0b0111;
+  CLKPR = 0b0101;
   sei();
 
   PRR = _BV(PRTWI) | _BV(PRTIM2) | _BV(PRTIM0) | _BV(PRTIM1) | _BV(PRSPI)
@@ -141,11 +143,11 @@ uint8_t sleep(void)
   PORTD |= 0b00010100;
   PORTB &=~0b00010000;
 
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+
   /* PCINT enable */
   PCICR  = _BV(PCIE1);
   PCMSK1 = _BV(PCINT10) | _BV(PCINT11);
-
-  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 
   do {
     cli();
@@ -155,13 +157,14 @@ uint8_t sleep(void)
     sei();
 
     sleep_mode();
-    tmp = PINC;
+
+    if (PCICR == 0) break;
 
     xorshift();
 
     /* blink dot per 0.5ms */
     PINB = 0b00010000;
-  } while ( (tmp & _BV(2)) && (tmp & _BV(3)) );
+  } while (1);
 
   cli();
   wdt_reset();
@@ -170,7 +173,7 @@ uint8_t sleep(void)
   sei();
 
   /* if s1 pushed exit idle loop, else continue idle */
-  return (tmp & _BV(2));
+  return (pinc_tmp & _BV(2));
 }
 
 /*-----------------------------------------------------------------------*/
@@ -382,7 +385,7 @@ uint8_t run(void)
 
       if (num == 0) {
         set_display(tmp);
-      } else if (prev <= counts[num]) {
+      } else if (num == 1 && prev <= counts[num]) {
         set_display(counts[num]);
       }
       prev = tmp;
