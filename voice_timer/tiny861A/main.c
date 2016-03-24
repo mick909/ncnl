@@ -35,6 +35,9 @@
 void delay_ms (uint16_t ms);
 void delay_us (uint16_t us);
 
+void enable_ac (void);
+void disable_ac (void);
+
 /* Low level SPI control functions */
 void init_spi (void);
 void xmit_spi_slow (uint8_t);
@@ -55,15 +58,18 @@ void setDisplay(uint16_t d)
 /* Work Area                                                             */
 /*-----------------------------------------------------------------------*/
 volatile uint16_t counter;
+volatile uint8_t count_num;
 
 volatile uint16_t buzz_time;
 volatile uint8_t buzz_pos;
 volatile uint8_t buzz_cnt;
 volatile uint8_t buzz_shut;
 
+volatile uint8_t ac_blank;
+
 volatile BYTE FifoRi, FifoWi, FifoCt;	/* FIFO controls */
 
-uint16_t counts[10];
+volatile uint16_t counts[10] = {0};
 
 BYTE Buff[256];		/* Wave output FIFO */
 
@@ -255,13 +261,16 @@ EMPTY_INTERRUPT(WDT_vect);
 static
 void idle(void)
 {
-	uint8_t disp_sw = 0;
+	uint8_t disp_sw = 0xff;
+	uint8_t count_pos;
 
 	/* Powerdown {PRTIM1, PRTIM0, PRADC} */
 	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
 
-	/* Display " 0.00" */
-	setDisplay(0);
+	delay_ms(20);
+
+	count_pos = (count_num) ? 1 : 0;
+	setDisplay(counts[count_pos]);
 
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 	sei();
@@ -279,6 +288,13 @@ void idle(void)
 
 		disp_sw <<= 1;
 		if (!(PINB & _BV(1))) ++disp_sw;
+
+		if (disp_sw == 1) {
+			if (count_num) {
+				if (++count_pos > count_num) count_pos = 1;
+				setDisplay(counts[count_pos]);
+			}
+		}
 	} while ( PINB & _BV(0) );
 
 	cli();
@@ -307,8 +323,10 @@ void voice_delay(void)
 	/* Powerdown {PRADC} */
 	PRR = _BV(PRADC);
 
-	/* Display " 0.00" */
-	setDisplay(0);
+	delay_ms(20);
+
+	/* Display "- - - -" */
+	setDisplay(0xf000);
 
 	if (pf_mount(&Fs) == FR_OK && play("/STDBY.WAV") == FR_OK) {
 		delay_count = 5;
@@ -379,6 +397,8 @@ uint8_t run(void)
 	/* Powerdown {} */
 	PRR = 0;
 
+	GPIOR1 = ((((PINA >> 5) & 0b00000011) + 2) % 4) + 1;
+
 	/* Set 10ms Timer Interrupt */
 	TCCR0A = _BV(TCW0);			/* 16bit operation */
 	TCCR0B = _BV(TSM) | _BV(PSR0) | _BV(CS01) | _BV(CS00);
@@ -386,39 +406,55 @@ uint8_t run(void)
 	TCNT0L = ((-(F_CPU / 64 / 100)) & 0x00ff);
 
 	counter = 0;
-	buzz_cnt = buzz_pos = buzz_shut = 0;
+	buzz_cnt = buzz_pos = buzz_shut = ac_blank = count_num = 0;
 	buzz_time = (47875 * 0.3);
 
 	TIMSK = _BV(TOIE0) | _BV(TOIE1);
 	TCCR0B = _BV(CS01) | _BV(CS00);
 
+	enable_ac();
+
 	set_sleep_mode(SLEEP_MODE_IDLE);
 	sei();
 	do {
 		uint16_t tmp;
+		uint8_t num;
 
 		sleep_mode();
 		cli();
 		tmp = counter;
+		num = count_num;
 		sei();
 
 		if (prev != tmp) {
+			if (num == 0) {
+				setDisplay(tmp + (dot?0:20000));
+			} else if (prev <= counts[num]) {
+				setDisplay(tmp + counts[num]);
+			}
+
 			prev = tmp;
+
+			if (num == 9) {
+				break;
+			}
 
 			if (--count50 == 0) {
 				count50 = 50;
 				dot ^= 1;
 			}
-			setDisplay(tmp + (dot?0:20000));
 
 			if (prev > 200) {
 				start_sw <<= 1; if (!(PINB & _BV(0))) ++start_sw;
 				disp_sw <<= 1; if (!(PINB & _BV(1))) ++disp_sw;
 			}
+
 		}
 	} while (start_sw != 0b0111 && disp_sw != 0b0111);
 
 	cli();
+
+	disable_ac();
 
 	TIMSK = 0;
 	TCCR0A = TCCR0B = 0;
@@ -440,6 +476,9 @@ int main (void)
 
 	TIMSK = 0;
 
+	ACSRA = 0b10000000;
+	DIDR0 = 0b10000000;
+
 	delay_ms(500);
 
 	init_spi();
@@ -448,7 +487,7 @@ int main (void)
 		idle();
 
 		do {
-			voice_delay();
+			if ( (PINB & _BV(2)) ) voice_delay();
 
 		} while ( run() );
 	}

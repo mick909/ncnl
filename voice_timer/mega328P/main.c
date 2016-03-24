@@ -128,8 +128,13 @@ int main (void)
 
 		sei();
 
- 		if (rb2 >= 0xE0) continue;
-
- 		set_display( (((uint16_t)rb2)<<8) + (uint16_t)rb1);
+		if (rb2 >= 0xE0) {
+			if (rb2 == 0xf0) {
+				seg_data[0] = seg_data[2] = seg_data[4] = seg_data[6] = 0b11111101;
+				seg_data[1] = seg_data[3] = seg_data[5] = seg_data[7] = 0b11111111;
+			}
+		} else {
+			set_display( (((uint16_t)rb2)<<8) + (uint16_t)rb1);
+		}
 	}
 }

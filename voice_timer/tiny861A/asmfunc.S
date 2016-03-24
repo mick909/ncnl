@@ -45,6 +45,82 @@ delay_us:
 
 
 ;---------------------------------------------------------------------------;
+; Enable Analog Comparator
+;
+; void enable_ac (void)
+
+.global enable_ac
+.func enable_ac
+enable_ac:
+	cbi		_SFR_IO_ADDR(ACSRA), 3
+	ldi		r25, 0b01011010
+	out		_SFR_IO_ADDR(ACSRA), r25
+	ret
+.endfunc
+
+
+;---------------------------------------------------------------------------;
+; Disable Analog Comparator
+;
+; void disable_ac (void)
+
+.global disable_ac
+.func disable_ac
+disable_ac:
+	cbi		_SFR_IO_ADDR(ACSRA), 3
+	ldi		r25, 0b10000000
+	out		_SFR_IO_ADDR(ACSRA), r25
+	ret
+.endfunc
+
+
+;---------------------------------------------------------------------------;
+; Analog Comparator  interrupt process
+;
+; ISR(ANALOG_COMP_vect);
+
+.global ANALOG_COMP_vect
+.func ANALOG_COMP_vect
+ANALOG_COMP_vect:
+	push	r24
+	in		r24, _SFR_IO_ADDR(SREG)
+	push	r24
+	push	r25
+	push	ZL
+	push	ZH
+
+	/* disable Comparator */
+	rcall	disable_ac
+
+	lds		r24, counter
+	lds		r25, counter+1
+
+	sei
+
+	lds		ZL, count_num
+	inc		ZL
+	sts		count_num, ZL
+	add		ZL, ZL
+	clr		ZH
+	subi	ZL, lo8(-(counts))
+	sbci	ZH, hi8(-(counts))
+	st		Z+, r24
+	st		Z, r25
+
+;	ldi		r24, 5
+;	sts		ac_blank, r24
+
+	pop		ZH
+	pop		ZL
+	pop		r25
+	pop		r24
+	out		_SFR_IO_ADDR(SREG), r24
+	pop		r24
+	reti
+.endfunc
+
+
+;---------------------------------------------------------------------------;
 ; Initialize USI
 ;
 ; void init_spi (void);
@@ -352,16 +428,24 @@ TIMER0_OVF_vect:
 	sts		counter, r24
 1:
 
+	lds		r25, ac_blank
+	subi	r25, 1
+	brcs	2f
+	sts		ac_blank, r25
+	brne	2f
+;	rcall	enable_ac
+2:
+
 ; if buzz_shut != 0
 	lds		r24, buzz_shut
 	subi	r24, 1
-	brcs	2f
+	brcs	9f
 
 	cbi		_SFR_IO_ADDR(PORTB), 6		; AMP CS=L
 
 ; if --buzz_shut == 0
 	sts		buzz_shut, r24
-	brne	2f
+	brne	9f
 
 ;	TCCR1A = TCCR1B = 0
 	clr		r24
@@ -371,7 +455,7 @@ TIMER0_OVF_vect:
 ; Timer1 power down
 	ldi		r24, 0b00001000
 	out		_SFR_IO_ADDR(PRR), r24		; PRTIM1=1
-2:
+9:
 
 	pop		r25
 	pop		r24				;
@@ -415,7 +499,7 @@ TIMER1_OVF_vect:
 	subi	r24, 1
 	sts		buzz_cnt, r24
 	brcc	9f
-	ldi		r24, 2
+	in		r24, _SFR_IO_ADDR(GPIOR1)
 	sts		buzz_cnt, r24
 
 	lds		r24, buzz_pos
