@@ -5,6 +5,10 @@
     BOD Disable
     WDT Disalbe
 
+  LFUSE : 0xDF  : CKDIV8=dis, CKOUT=dis, SUT=01, CKSEL=1111
+  HFUSE : 0xDD  : RST=1, DebugWire=dis, SPI=en, WDT=off, EEPROM=clear, BOD=dis
+  EFUSE : 0x01  : SELFPRGEN - disable
+
   PA0 : DI/MOSI  : In-Pullup
   PA1 : DO/MISO  : Out-low
   PA2 : SCK      : OUT-low
@@ -38,6 +42,57 @@ void delay_us (uint16_t us);
 void enable_ac (void);
 void disable_ac (void);
 
+
+/*-----------------------------------------------------------------------*/
+/* Work Area                                                             */
+/*-----------------------------------------------------------------------*/
+volatile uint16_t counter;
+
+volatile uint16_t buzz_time;
+volatile uint8_t buzz_pos;
+volatile uint8_t buzz_cnt;
+volatile uint8_t buzz_shut;
+
+volatile uint8_t count_num;
+
+volatile uint8_t ac_blank;
+
+volatile BYTE FifoRi, FifoWi, FifoCt;	/* FIFO controls */
+
+volatile uint16_t counts[10];
+
+BYTE Buff[256];		/* Wave output FIFO */
+
+FATFS Fs;			/* File system object */
+
+WORD rb;			/* Return value. Put this here to avoid avr-gcc's bug */
+
+
+/*-----------------------------------------------------------------------*/
+/* Reset Watchdog on boot                                                */
+/*-----------------------------------------------------------------------*/
+void get_mcusr(void) __attribute__((naked)) __attribute__((section(".init3")));
+void get_mcusr(void)
+{
+	MCUSR = 0;
+	wdt_disable();
+}
+
+
+/*-----------------------------------------------------------------------*/
+/* Interrupts                                                            */
+/*-----------------------------------------------------------------------*/
+
+EMPTY_INTERRUPT(WDT_vect);
+
+ISR(PCINT_vect)
+{
+	PCMSK1 = GIMSK = 0;
+}
+
+/*-----------------------------------------------------------------------*/
+/* SPI LED CONTROL                                                       */
+/*-----------------------------------------------------------------------*/
 /* Low level SPI control functions */
 void init_spi (void);
 void xmit_spi_slow (uint8_t);
@@ -54,28 +109,6 @@ void setDisplay(uint16_t d)
 	deselect_led();
 }
 
-/*-----------------------------------------------------------------------*/
-/* Work Area                                                             */
-/*-----------------------------------------------------------------------*/
-volatile uint16_t counter;
-volatile uint8_t count_num;
-
-volatile uint16_t buzz_time;
-volatile uint8_t buzz_pos;
-volatile uint8_t buzz_cnt;
-volatile uint8_t buzz_shut;
-
-volatile uint8_t ac_blank;
-
-volatile BYTE FifoRi, FifoWi, FifoCt;	/* FIFO controls */
-
-volatile uint16_t counts[10] = {0};
-
-BYTE Buff[256];		/* Wave output FIFO */
-
-FATFS Fs;			/* File system object */
-
-WORD rb;			/* Return value. Put this here to avoid avr-gcc's bug */
 
 /*-----------------------------------------------------------------------*/
 /* MMC Access & Play Wav                                                 */
@@ -161,6 +194,23 @@ FRESULT play (
 			return 255;	/* Cannot play this file */
 		}
 
+		{
+			set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+
+			/* Set WDT to interrupt mode in timeout of 1s */
+			wdt_reset();
+			WDTCR = _BV(WDE) | _BV(WDIE) | 0b110;
+
+			sei();
+			sleep_mode();
+			cli();
+
+			/* Disable WDT */
+			wdt_reset();
+			WDTCR = _BV(WDCE) | _BV(WDE);
+			WDTCR = 0;
+		}
+
 		FifoCt = 0; FifoRi = 0; FifoWi = 0;	/* Reset audio FIFO */
 
 		delay_ms(500);
@@ -175,7 +225,7 @@ FRESULT play (
 		TCCR1A = 0b00100001;	/* Enable OC1B as PWM */
 		TCCR1B = 0b00000001;	/* Start TC1 */
 
-		delay_ms(1);
+		delay_ms(50);
 
 		// CE = L
 		PORTB |= _BV(6);
@@ -221,6 +271,7 @@ FRESULT play (
 	return res;
 }
 
+
 /*-----------------------------------------------------------------------*/
 /* Xorshift pseudo random generator                                      */
 /*-----------------------------------------------------------------------*/
@@ -232,27 +283,33 @@ uint32_t xorshift(void)
 	return y;
 }
 
+
 /*-----------------------------------------------------------------------*/
-/* Reset Watchdog on boot                                                */
+/* Wait switch release                                                   */
 /*-----------------------------------------------------------------------*/
-void get_mcusr(void) __attribute__((naked)) __attribute__((section(".init3")));
-void get_mcusr(void)
+void wait_sw_release (void)
 {
-	MCUSR = 0;
-	wdt_disable();
+	uint8_t disp_sw = 0;
+
+	do {
+		/* Set WDT to interrupt mode in timeout of 16ms */
+		wdt_reset();
+		WDTCR = _BV(WDE) | _BV(WDIE) | 0b000;
+
+		sleep_mode();
+		xorshift();
+
+		disp_sw <<= 1;
+		if (PINB & _BV(1)) ++disp_sw;
+	} while (disp_sw != 0xff);
 }
 
-/*-----------------------------------------------------------------------*/
-/* Interrupts                                                            */
-/*-----------------------------------------------------------------------*/
-
-EMPTY_INTERRUPT(WDT_vect);
 
 /*-----------------------------------------------------------------------*/
-/* IDLE Mode                                                             */
+/* IDLE Mode (with SLEEP)                                                */
 /*-----------------------------------------------------------------------*/
 /*
- * Wakeup per 16ms (WDT Interrupt)
+ * Wakeup per 1s (WDT Interrupt)
  * Check switch
  * proceed random sequence
  *
@@ -261,8 +318,11 @@ EMPTY_INTERRUPT(WDT_vect);
 static
 void idle(void)
 {
-	uint8_t disp_sw = 0xff;
+//	uint8_t disp_sw = 0xff;
 	uint8_t count_pos;
+	uint8_t pwrdwn;
+	uint8_t tmp;
+	uint8_t blink = 1;
 
 	/* Powerdown {PRTIM1, PRTIM0, PRADC} */
 	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
@@ -270,32 +330,56 @@ void idle(void)
 	delay_ms(20);
 
 	count_pos = (count_num) ? 1 : 0;
-	setDisplay(counts[count_pos]);
+	if (GPIOR2) {
+		setDisplay(0xff00);
+		pwrdwn = 0;
+	} else {
+		setDisplay(counts[count_pos]);
+		pwrdwn = 180;
+	}
+	GPIOR2 = 0;
 
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 	sei();
+	wait_sw_release();
 
 	do {
-		/* Set WDT to interrupt mode in timeout of 16ms */
+		PCMSK1 = _BV(PCINT8) | _BV(PCINT9);
+		GIMSK = _BV(PCIE0);
+
+		/* Set WDT to interrupt mode in timeout of 1s */
 		wdt_reset();
-		WDTCR = _BV(WDE) | _BV(WDIE) | 0b000;
+		WDTCR = _BV(WDE) | _BV(WDIE) | 0b110;
 
 		/* Enter powerdown mode */
-		/* Only wakeup by WDT */
 		sleep_mode();
+		tmp = PINB;
 
 		xorshift();
 
-		disp_sw <<= 1;
-		if (!(PINB & _BV(1))) ++disp_sw;
-
-		if (disp_sw == 1) {
-			if (count_num) {
-				if (++count_pos > count_num) count_pos = 1;
+		if ( (tmp & 0b011) == 0b011 ) {
+			if (pwrdwn) {
+				--pwrdwn;
 				setDisplay(counts[count_pos]);
+			} else {
+				setDisplay( (0xff ^ blink) << 8 );
+				blink ^= 1;
 			}
+			continue;
 		}
-	} while ( PINB & _BV(0) );
+
+		if ( !(tmp & _BV(1)) ) {
+			if (pwrdwn) {
+				if (count_num) {
+					if (++count_pos > count_num) count_pos = 1;
+				}
+			}
+			setDisplay(counts[count_pos]);
+
+			wait_sw_release();
+			pwrdwn = 180;
+		}
+	} while ( tmp & _BV(0) );
 
 	cli();
 
@@ -332,7 +416,10 @@ void voice_delay(void)
 		delay_count = 5;
 	}
 
-	delay_count += (uint8_t)(xorshift() & 0x00f);
+	/* Powerdown {PRTIM1, PRTIM0, PRADC} */
+	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
+
+	delay_count += (uint8_t)(xorshift() & 0x01f);
 
 	TIMSK = 0;
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
@@ -342,6 +429,8 @@ void voice_delay(void)
 		/* Set WDT to interrupt mode in timeout of 64ms */
 		wdt_reset();
 		WDTCR = _BV(WDE) | _BV(WDIE) | 0b010;
+
+//		setDisplay(delay_count * 6.4);
 
 		/* Enter powerdown mode */
 		/* Only wakeup by WDT */
@@ -387,15 +476,17 @@ uint8_t run(void)
 	TCCR1A = _BV(COM1B1) | _BV(PWM1B);
 	TCCR1B = _BV(CS10);
 
-	delay_ms(1);
+	delay_ms(50);
 
 	PORTB |= _BV(6);
 
 	delay_ms(30);
 	/***************/
 
-	/* Powerdown {} */
-	PRR = 0;
+//	/* Powerdown {} */
+//	PRR = 0;
+	/* Powerdown {PRADC} */
+	PRR = _BV(PRADC);
 
 	GPIOR1 = ((((PINA >> 5) & 0b00000011) + 2) % 4) + 1;
 
@@ -407,7 +498,7 @@ uint8_t run(void)
 
 	counter = 0;
 	buzz_cnt = buzz_pos = buzz_shut = ac_blank = count_num = 0;
-	buzz_time = (47875 * 0.3);
+	buzz_time = (47875 * 0.4);
 
 	TIMSK = _BV(TOIE0) | _BV(TOIE1);
 	TCCR0B = _BV(CS01) | _BV(CS00);
@@ -429,8 +520,8 @@ uint8_t run(void)
 		if (prev != tmp) {
 			if (num == 0) {
 				setDisplay(tmp + (dot?0:20000));
-			} else if (prev <= counts[num]) {
-				setDisplay(tmp + counts[num]);
+			} else if (num == 1 && prev <= counts[num]) {
+				setDisplay(counts[num] + (dot?0:20000));
 			}
 
 			prev = tmp;
@@ -439,16 +530,23 @@ uint8_t run(void)
 				break;
 			}
 
+			if (prev == 18000) {
+				GPIOR2 = 1;
+				break;
+			}
+
 			if (--count50 == 0) {
 				count50 = 50;
 				dot ^= 1;
+				if (num) {
+					setDisplay(counts[1] + (dot?0:20000));
+				}
 			}
 
 			if (prev > 200) {
 				start_sw <<= 1; if (!(PINB & _BV(0))) ++start_sw;
 				disp_sw <<= 1; if (!(PINB & _BV(1))) ++disp_sw;
 			}
-
 		}
 	} while (start_sw != 0b0111 && disp_sw != 0b0111);
 
@@ -476,12 +574,18 @@ int main (void)
 
 	TIMSK = 0;
 
-	ACSRA = 0b10000000;
-	DIDR0 = 0b10000000;
+	ACSRA = 0b10000000;		/* Analog Compalator : Power down */
+	ADMUX = 0b10000000;		/* REFS=010 : BG=1.1V */
+	DIDR0 = 0b10000000;		/* AIN1 : digial input disable */
+
+	counts[0] = 0;
+	count_num = 0;
 
 	delay_ms(500);
 
 	init_spi();
+
+	GPIOR2 = 0;
 
 	for (;;) {
 		idle();

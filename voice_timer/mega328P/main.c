@@ -4,6 +4,10 @@
 /    3.3V
 /    BOD Disable
 /    WDT Disalbe
+/
+/  LFUSE : 0xE2 : CKDIV8=dis, CKOUT=dis, SUT=10, CKSEL=0010
+/  HFUSE : 0xDB : RST=1, DebugWIre=dis, SPI=en, WDT=off, EEPROM=clear. BOOTSZ=01, BOOTRST=apl
+/  EFUSE : 0x07 : BOD = disable
 /----------------------------------------------------------------------------*/
 
 #include <avr/io.h>
@@ -132,6 +136,15 @@ int main (void)
 			if (rb2 == 0xf0) {
 				seg_data[0] = seg_data[2] = seg_data[4] = seg_data[6] = 0b11111101;
 				seg_data[1] = seg_data[3] = seg_data[5] = seg_data[7] = 0b11111111;
+			}
+			if (rb2 == 0xff) {
+				seg_data[0] = seg_data[2] = seg_data[4] = seg_data[6] =
+				seg_data[1] = seg_data[3] = seg_data[5] = seg_data[7] = 0b11111111;
+			}
+			if (rb2 == 0xfe) {
+				seg_data[0] = seg_data[2] = seg_data[6] =
+				seg_data[1] = seg_data[3] = seg_data[5] = seg_data[7] = 0b11111111;
+				seg_data[4] = 0b11110111;
 			}
 		} else {
 			set_display( (((uint16_t)rb2)<<8) + (uint16_t)rb1);

@@ -52,9 +52,10 @@ delay_us:
 .global enable_ac
 .func enable_ac
 enable_ac:
-	cbi		_SFR_IO_ADDR(ACSRA), 3
-	ldi		r25, 0b01011010
-	out		_SFR_IO_ADDR(ACSRA), r25
+	cbi		_SFR_IO_ADDR(ACSRA), 3			; clear ACIE
+	ldi		r24, 0b01010010					; ACBG=1, ACI=1, ACIS=10
+	out		_SFR_IO_ADDR(ACSRA), r24
+	sbi		_SFR_IO_ADDR(ACSRA), 3			; set ACIE
 	ret
 .endfunc
 
@@ -67,9 +68,9 @@ enable_ac:
 .global disable_ac
 .func disable_ac
 disable_ac:
-	cbi		_SFR_IO_ADDR(ACSRA), 3
-	ldi		r25, 0b10000000
-	out		_SFR_IO_ADDR(ACSRA), r25
+	cbi		_SFR_IO_ADDR(ACSRA), 3			; clear ACIE
+	ldi		r24, 0b10000000					; ACD = 1
+	out		_SFR_IO_ADDR(ACSRA), r24
 	ret
 .endfunc
 
@@ -77,11 +78,11 @@ disable_ac:
 ;---------------------------------------------------------------------------;
 ; Analog Comparator  interrupt process
 ;
-; ISR(ANALOG_COMP_vect);
+; ISR(ANA_COMP_vect);
 
-.global ANALOG_COMP_vect
-.func ANALOG_COMP_vect
-ANALOG_COMP_vect:
+.global ANA_COMP_vect
+.func ANA_COMP_vect
+ANA_COMP_vect:
 	push	r24
 	in		r24, _SFR_IO_ADDR(SREG)
 	push	r24
@@ -107,8 +108,8 @@ ANALOG_COMP_vect:
 	st		Z+, r24
 	st		Z, r25
 
-;	ldi		r24, 5
-;	sts		ac_blank, r24
+	ldi		r24, 5
+	sts		ac_blank, r24
 
 	pop		ZH
 	pop		ZL
@@ -417,15 +418,16 @@ TIMER0_OVF_vect:
 	adiw	r24, 1
 	sts		counter+1, r25
 	sts		counter, r24
+
 ; if counter >= 20000
-	subi	r24, lo8(20000)
-	sbci	r25, hi8(20000)
-	brcs	1f
+;	subi	r24, lo8(20000)
+;	sbci	r25, hi8(20000)
+;	brcs	1f
 ; then counter = 10000
-	ldi		r24, lo8(10000)
-	ldi		r25, hi8(10000)
-	sts		counter+1, r25
-	sts		counter, r24
+;	ldi		r24, lo8(10000)
+;	ldi		r25, hi8(10000)
+;	sts		counter+1, r25
+;	sts		counter, r24
 1:
 
 	lds		r25, ac_blank
@@ -433,7 +435,7 @@ TIMER0_OVF_vect:
 	brcs	2f
 	sts		ac_blank, r25
 	brne	2f
-;	rcall	enable_ac
+	rcall	enable_ac
 2:
 
 ; if buzz_shut != 0
