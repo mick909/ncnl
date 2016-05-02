@@ -419,7 +419,7 @@ void voice_delay(void)
 	/* Powerdown {PRTIM1, PRTIM0, PRADC} */
 	PRR = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
 
-	delay_count += (uint8_t)(xorshift() & 0x01f);
+	delay_count += (uint8_t)(xorshift() & 0x0f) + (uint8_t)(xorshift() & 0x07) + (uint8_t)(xorshift() & 0x03);
 
 	TIMSK = 0;
 	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
