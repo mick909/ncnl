@@ -1,0 +1,38 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/sleep.h>
+
+#define TWI_SLAVE_ADDRESS (0x20)
+
+#define USI_SCL	2
+#define USI_SDA 0
+
+int main()
+{
+	MCUSR = 0;
+
+	/*
+	  PB0 : SDA
+	  PB1 : AIN1
+	  PB2 : SCL
+	  PB3 : Output
+	  PB4 : Output
+	*/
+	PORTB = 0b00000101;
+	DDRB  = 0b00011100;
+
+	/* PB1(AIN1) Digital Input Disable */
+	DIDR0 = 0b00000010;
+
+	/* Analog Comparator Disable */
+	ACSR  = 0b10000000;
+
+	/* Powerdown : Timer1, Timer0, AD Converter */
+	PRR   = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
+
+
+	for (;;) {
+/**********************************************************/
+
+	}
+}

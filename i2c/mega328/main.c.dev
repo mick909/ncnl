@@ -1,0 +1,254 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/sleep.h>
+#include <avr/wdt.h>
+
+void usart_init(void);
+void usart_tx(uint8_t c);
+uint8_t usart_rx_empty();
+uint8_t usart_rx(void);
+
+#define TWI_SLAVE_ADDRESS (0x20)
+
+#define TWI_TWBR	(2)
+#define TWI_TWPS	(0)
+
+/****************************************************************************
+  TWI State codes
+****************************************************************************/
+// General TWI Master status codes
+#define TWI_START                  0x08  // START has been transmitted
+#define TWI_REP_START              0x10  // Repeated START has been transmitted
+#define TWI_ARB_LOST               0x38  // Arbitration lost
+
+// TWI Master Transmitter status codes
+#define TWI_MTX_ADR_ACK            0x18  // SLA+W has been transmitted and ACK received
+#define TWI_MTX_ADR_NACK           0x20  // SLA+W has been transmitted and NACK received
+#define TWI_MTX_DATA_ACK           0x28  // Data byte has been transmitted and ACK received
+#define TWI_MTX_DATA_NACK          0x30  // Data byte has been transmitted and NACK received
+
+// TWI Master Receiver status codes
+#define TWI_MRX_ADR_ACK            0x40  // SLA+R has been transmitted and ACK received
+#define TWI_MRX_ADR_NACK           0x48  // SLA+R has been transmitted and NACK received
+#define TWI_MRX_DATA_ACK           0x50  // Data byte has been received and ACK transmitted
+#define TWI_MRX_DATA_NACK          0x58  // Data byte has been received and NACK transmitted
+
+// TWI Slave Transmitter status codes
+#define TWI_STX_ADR_ACK            0xA8  // Own SLA+R has been received; ACK has been returned
+#define TWI_STX_ADR_ACK_M_ARB_LOST 0xB0  // Arbitration lost in SLA+R/W as Master; own SLA+R has been received; ACK has been returned
+#define TWI_STX_DATA_ACK           0xB8  // Data byte in TWDR has been transmitted; ACK has been received
+#define TWI_STX_DATA_NACK          0xC0  // Data byte in TWDR has been transmitted; NOT ACK has been received
+#define TWI_STX_DATA_ACK_LAST_BYTE 0xC8  // Last data byte in TWDR has been transmitted (TWEA = “0”); ACK has been received
+
+// TWI Slave Receiver status codes
+#define TWI_SRX_ADR_ACK            0x60  // Own SLA+W has been received ACK has been returned
+#define TWI_SRX_ADR_ACK_M_ARB_LOST 0x68  // Arbitration lost in SLA+R/W as Master; own SLA+W has been received; ACK has been returned
+#define TWI_SRX_GEN_ACK            0x70  // General call address has been received; ACK has been returned
+#define TWI_SRX_GEN_ACK_M_ARB_LOST 0x78  // Arbitration lost in SLA+R/W as Master; General call address has been received; ACK has been returned
+#define TWI_SRX_ADR_DATA_ACK       0x80  // Previously addressed with own SLA+W; data has been received; ACK has been returned
+#define TWI_SRX_ADR_DATA_NACK      0x88  // Previously addressed with own SLA+W; data has been received; NOT ACK has been returned
+#define TWI_SRX_GEN_DATA_ACK       0x90  // Previously addressed with general call; data has been received; ACK has been returned
+#define TWI_SRX_GEN_DATA_NACK      0x98  // Previously addressed with general call; data has been received; NOT ACK has been returned
+#define TWI_SRX_STOP_RESTART       0xA0  // A STOP condition or repeated START condition has been received while still addressed as Slave
+
+// TWI Miscellaneous status codes
+#define TWI_NO_STATE               0xF8  // No relevant state information available; TWINT = “0”
+#define TWI_BUS_ERROR              0x00  // Bus error due to an illegal START or STOP condition
+
+
+volatile uint8_t TWI_buf[4];
+volatile uint8_t TWI_msgSize;
+volatile uint8_t TWI_state = TWI_NO_STATE;
+
+volatile uint8_t TWI_statusReg = 0;
+
+EMPTY_INTERRUPT(WDT_vect);
+
+
+// ********** Interrupt Handlers ********** //
+/****************************************************************************
+This function is the Interrupt Service Routine (ISR), and called when the TWI interrupt is triggered;
+that is whenever a TWI event has occurred. This function should not be called directly from the main
+application.
+****************************************************************************/
+ISR(TWI_vect)
+{
+	static uint8_t TWI_bufPtr;
+
+	switch (TWSR) {
+	case TWI_START:             // START has been transmitted
+	case TWI_REP_START:         // Repeated START has been transmitted
+		TWI_bufPtr = 0;                                     // Set buffer pointer to the TWI Address location
+
+	case TWI_MTX_ADR_ACK:       // SLA+W has been transmitted and ACK received
+	case TWI_MTX_DATA_ACK:      // Data byte has been transmitted and ACK received
+		if (TWI_bufPtr < TWI_msgSize) {
+			TWDR = TWI_buf[TWI_bufPtr++];
+			TWCR = (1<<TWEN)|                                 // TWI Interface enabled
+					(1<<TWIE)|(1<<TWINT)|                     // Enable TWI Interrupt and clear the flag to send byte
+					(0<<TWEA)|(0<<TWSTA)|(0<<TWSTO)|          //
+					(0<<TWWC);                                //
+		} else                    // Send STOP after last byte
+		{
+			TWI_statusReg = 1;                                // Set status bits to completed successfully.
+			TWCR = (1<<TWEN)|                                 // TWI Interface enabled
+					(0<<TWIE)|(1<<TWINT)|                     // Disable TWI Interrupt and clear the flag
+					(0<<TWEA)|(0<<TWSTA)|(1<<TWSTO)|          // Initiate a STOP condition.
+					(0<<TWWC);                                //
+		}
+		break;
+	case TWI_MRX_DATA_ACK:      // Data byte has been received and ACK transmitted
+		TWI_buf[TWI_bufPtr++] = TWDR;
+
+	case TWI_MRX_ADR_ACK:       // SLA+R has been transmitted and ACK received
+		if (TWI_bufPtr < (TWI_msgSize-1) )                  // Detect the last byte to NACK it.
+		{
+			TWCR = (1<<TWEN)|                                 // TWI Interface enabled
+					(1<<TWIE)|(1<<TWINT)|                     // Enable TWI Interrupt and clear the flag to read next byte
+					(1<<TWEA)|(0<<TWSTA)|(0<<TWSTO)|          // Send ACK after reception
+					(0<<TWWC);                                //
+		} else                    // Send NACK after next reception
+		{
+			TWCR = (1<<TWEN)|                                 // TWI Interface enabled
+					(1<<TWIE)|(1<<TWINT)|                     // Enable TWI Interrupt and clear the flag to read next byte
+					(0<<TWEA)|(0<<TWSTA)|(0<<TWSTO)|          // Send NACK after reception
+					(0<<TWWC);                                //
+		}
+		break;
+	case TWI_MRX_DATA_NACK:     // Data byte has been received and NACK transmitted
+		TWI_buf[TWI_bufPtr] = TWDR;
+		TWI_statusReg = 1;                                // Set status bits to completed successfully.
+		TWCR = (1<<TWEN)|                                 // TWI Interface enabled
+				(0<<TWIE)|(1<<TWINT)|                     // Disable TWI Interrupt and clear the flag
+				(0<<TWEA)|(0<<TWSTA)|(1<<TWSTO)|          // Initiate a STOP condition.
+				(0<<TWWC);                                //
+		break;
+
+	case TWI_ARB_LOST:          // Arbitration lost
+		TWCR = (1<<TWEN)|                                 // TWI Interface enabled
+				(1<<TWIE)|(1<<TWINT)|                     // Enable TWI Interrupt and clear the flag
+				(0<<TWEA)|(1<<TWSTA)|(0<<TWSTO)|          // Initiate a (RE)START condition.
+				(0<<TWWC);                                //
+		break;
+
+	case TWI_MTX_ADR_NACK:      // SLA+W has been transmitted and NACK received
+	case TWI_MRX_ADR_NACK:      // SLA+R has been transmitted and NACK received
+	case TWI_MTX_DATA_NACK:     // Data byte has been transmitted and NACK received
+	case TWI_BUS_ERROR:         // Bus error due to an illegal START or STOP condition
+	default:
+		TWI_state = TWSR;                                 // Store TWSR and automatically sets clears noErrors bit.
+                                                          // Reset TWI Interface
+		TWCR = (1<<TWEN)|                                 // Enable TWI-interface and release TWI pins
+				(0<<TWIE)|(0<<TWINT)|                     // Disable Interrupt
+				(0<<TWEA)|(0<<TWSTA)|(0<<TWSTO)|          // No Signal requests
+				(0<<TWWC);                                //
+	}
+}
+
+void twi_master_init(void)
+{
+	TWBR = TWI_TWBR;                                  // Set bit rate register (Baud rate). Defined in header file.Driver presumes prescaler to be 00.
+	TWDR = 0xFF;                                      // Default content = SDA released.
+
+	/* TWI Interrupt Flag       */
+	/* TWI Enable Ack : Disable */
+	/* TWI Start Cond : Disable */
+	/* TWI Stop Cond  : Disable */
+	/* TWI Enable     : Enable  */
+	/* TWI Interrupt  : Disable */
+	TWCR = 0b00000100;
+}
+
+static
+uint8_t twi_tx_busy(void)
+{
+	return TWCR & _BV(TWIE);
+}
+
+void twi_transmit_send(uint8_t data)
+{
+	while (twi_tx_busy());
+
+	TWI_msgSize = 2;
+	TWI_buf[0] = (TWI_SLAVE_ADDRESS << 1);
+	TWI_buf[1] = data;
+
+	TWI_statusReg = 0;
+	TWI_state = TWI_NO_STATE;
+
+	/* TWI Interrupt Flag       */
+	/* TWI Enable Ack : Disable */
+	/* TWI Start Cond : Disable */
+	/* TWI Stop Cond  : Disable */
+	/* TWI Enable     : Enable  */
+	/* TWI Interrupt  : Enable */
+	TWCR = 0b10000101;
+}
+
+void twi_transmit_recv(void)
+{
+	while (twi_tx_busy());
+
+	TWI_msgSize = 2;
+	TWI_buf[0] = (TWI_SLAVE_ADDRESS << 1) | 1;
+
+	TWI_statusReg = 0;
+	TWI_state = TWI_NO_STATE;
+
+	/* TWI Interrupt Flag       */
+	/* TWI Enable Ack : Disable */
+	/* TWI Start Cond : Disable */
+	/* TWI Stop Cond  : Disable */
+	/* TWI Enable     : Enable  */
+	/* TWI Interrupt  : Enable */
+	TWCR = 0b10000101;
+}
+
+
+
+int main()
+{
+	usart_init();
+	twi_master_init();
+
+	set_sleep_mode(SLEEP_MODE_IDLE);
+	sei();
+
+	usart_tx_str("Start:\r\n");
+
+	for(;;) {
+//		sleep_mode();
+
+		while (!usart_rx_empty()) {
+			do {
+				uint8_t data = usart_rx();
+
+				usart_tx_str("Send data to Slave\r\n");
+
+				twi_transmit_send(data);
+
+				do {
+				} while (twi_tx_busy());
+
+				if (!TWI_statusReg) {
+					break;
+				}
+
+				usart_tx_str("Send read request to Slave\r\n");
+
+				twi_transmit_recv();
+
+				do {
+				} while (twi_tx_busy());
+
+				if (!TWI_statusReg) {
+					break;
+				}
+
+				usart_tx_str("read done\r\n");
+
+				usart_tx(TWI_buf[1]);
+			} while (0);
+		}
+	}
+}

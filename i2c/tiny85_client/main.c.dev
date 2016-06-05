@@ -1,0 +1,291 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/sleep.h>
+
+#define TWI_SLAVE_ADDRESS (0x20)
+
+#define USI_SCL	2
+#define USI_SDA 0
+
+#define USI_SLAVE_CHECK_ADDRESS                (0x00)
+#define USI_SLAVE_TO_MASTER                    (0x01)
+#define USI_SLAVE_TO_MASTER_SEND_DATA          (0x02)
+#define USI_SLAVE_TO_MASTER_CHECK_REPLY        (0x03)
+#define USI_MASTER_TO_SLAVE                    (0x04)
+#define USI_MASTER_TO_SLAVE_GET_DATA           (0x05)
+#define USI_MASTER_TO_SLAVE_NACK               (0x06)
+
+volatile uint8_t USI_Overflow_State;
+
+#define TWI_TX_BUFFER_SIZE 4
+#define TWI_TX_BUFFER_MASK 0x03
+
+static uint8_t TWI_tx_buffer[TWI_TX_BUFFER_SIZE];
+volatile uint8_t twi_tx_ri;
+volatile uint8_t twi_tx_wi;
+volatile uint8_t twi_tx_cnt;
+
+#define TWI_RX_BUFFER_SIZE 4
+#define TWI_RX_BUFFER_MASK 0x03
+
+static uint8_t TWI_rx_buffer[TWI_RX_BUFFER_SIZE];
+volatile uint8_t twi_rx_ri;
+volatile uint8_t twi_rx_wi;
+volatile uint8_t twi_rx_cnt;
+
+
+void USI_TWI_Slave_Initialize(void)
+{
+	twi_tx_ri = twi_tx_wi = twi_tx_cnt = twi_rx_ri = twi_rx_wi = twi_rx_cnt = 0;
+
+	PORTB |=  _BV(USI_SCL) | _BV(USI_SDA);
+	DDRB  |=  _BV(USI_SCL);
+	DDRB  &= ~_BV(USI_SDA);
+
+	/* StartCondition Int : En  */
+	/* Wire Mode          : TWI */
+	/* ShiftRegisterClock : Ext L->H, Count Double */
+	USICR = 0b10101000;
+
+	/* Flag clear & counter clear */
+	USISR = 0xF0;
+}
+
+static
+void USI_TWI_Start_Condition_Mode(void)
+{
+	/* StartCondition Int : En  */
+	/* Wire Mode          : TWI */
+	/* ShiftRegisterClock : Ext L->H, Count Double */
+	USICR = 0b10101000;
+
+	/* Flag clear (except Start Condition flag) & counter clear */
+	USISR = 0x70;
+
+	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+}
+
+static
+void USI_Send_Ack(void)
+{
+	USIDR = 0;
+	DDRB |= _BV(USI_SDA);
+
+	/* Flag clear (except Start Condition flag) & counter clear to 1bit shift */
+	USISR = 0x7E;
+}
+
+static
+void USI_Send_Nack(void)
+{
+	USIDR = 0xff;
+	DDRB |= _BV(USI_SDA);
+
+	/* Flag clear (except Start Condition flag) & counter clear to 1bit shift */
+	USISR = 0x7E;
+}
+
+static
+void USI_Read_Ack(void)
+{
+	DDRB &= ~(_BV(USI_SDA));
+	USIDR = 0;
+
+	/* Flag clear (except Start Condition flag) & counter clear to 1bit shift */
+	USISR = 0x7E;
+}
+
+static
+void USI_TWI_Send_Data(void)
+{
+	DDRB |= _BV(USI_SDA);
+
+	/* Flag clear (except Start Condition flag) & counter clear to 8bit shift */
+	USISR = 0x70;
+}
+
+static
+void USI_TWI_Read_Data(void)
+{
+	DDRB &= ~(_BV(USI_SDA));
+
+	/* Flag clear (except Start Condition flag) & counter clear to 8bit shift */
+	USISR = 0x70;
+}
+
+ISR(USI_START_vect)
+{
+	USI_Overflow_State = USI_SLAVE_CHECK_ADDRESS;
+	DDRB &= ~(_BV(USI_SDA));
+
+	do {
+	} while ( (PINB & _BV(USI_SCL)) & !(USISR & _BV(USIPF)) );
+
+	/* StartCondition Int : En  */
+	/* Overflow Int       : En  */
+	/* Wire Mode          : TWI */
+	/*   Keep SCL Low untin USIOIF = 1 */
+	/* ShiftRegisterClock : Ext L->H, Count Double */
+	USICR = 0b11111000;
+
+	/* Flag clear & counter clear */
+	USISR = 0xF0;
+
+	set_sleep_mode(SLEEP_MODE_IDLE);
+}
+
+ISR(USI_OVF_vect)
+{
+	uint8_t cnt;
+	uint8_t i;
+
+	switch (USI_Overflow_State) {
+		/* ======== Start Condition Mode ======== */
+		case USI_SLAVE_CHECK_ADDRESS:
+			if ( (USIDR >> 1) == TWI_SLAVE_ADDRESS ) {
+				if ( USIDR & 0x01 ) {
+					USI_Overflow_State = USI_SLAVE_TO_MASTER;
+				} else {
+					USI_Overflow_State = USI_MASTER_TO_SLAVE;
+				}
+
+				USI_Send_Ack();
+			} else {
+				USI_TWI_Start_Condition_Mode();
+			}
+			break;
+
+		/* ======== Mater <- Slave  ======== */
+		case USI_SLAVE_TO_MASTER_CHECK_REPLY:
+			if (USIDR) {
+				/* Receive NACK */
+				USI_TWI_Start_Condition_Mode();
+				break;
+			}
+		/*** Receive ACK -> drop to USI_SLAVE_TO_MASTER to send next data ***/
+
+		case USI_SLAVE_TO_MASTER:
+			cnt = twi_tx_cnt;
+			i = twi_tx_ri;
+
+			if (cnt) {
+				USIDR = TWI_tx_buffer[i];
+				twi_tx_ri = (i+1) & TWI_TX_BUFFER_MASK;
+				twi_tx_cnt = cnt-1;
+
+				USI_Overflow_State = USI_SLAVE_TO_MASTER_SEND_DATA;
+				USI_TWI_Send_Data();
+			} else {
+				USI_TWI_Start_Condition_Mode();
+			}
+			break;
+
+		case USI_SLAVE_TO_MASTER_SEND_DATA:
+			USI_Overflow_State = USI_SLAVE_TO_MASTER_CHECK_REPLY;
+			USI_Read_Ack();
+			break;
+
+		/* ======== Mater -> Slave  ======== */
+		case USI_MASTER_TO_SLAVE:
+			USI_Overflow_State = USI_MASTER_TO_SLAVE_GET_DATA;
+			USI_TWI_Read_Data();
+			break;
+
+		case USI_MASTER_TO_SLAVE_GET_DATA:
+			cnt = twi_rx_cnt;
+			i = twi_rx_wi;
+
+			if (cnt == TWI_TX_BUFFER_SIZE) {
+				USI_Overflow_State = USI_MASTER_TO_SLAVE_NACK;
+				USI_Send_Nack();
+				break;
+			} else {
+				TWI_rx_buffer[i] = USIDR;
+				twi_rx_cnt = cnt+1;
+				twi_rx_wi = (i+1) & TWI_RX_BUFFER_MASK;
+
+				USI_Overflow_State = USI_MASTER_TO_SLAVE;
+				USI_Send_Ack();
+				break;
+			}
+
+		case USI_MASTER_TO_SLAVE_NACK:
+			USI_TWI_Start_Condition_Mode();
+			break;
+	}
+}
+
+uint8_t twi_rx_empty()
+{
+	return twi_rx_cnt == 0;
+}
+
+uint8_t twi_rx(void)
+{
+	uint8_t data;
+	uint8_t ri;
+
+	while (twi_rx_cnt == 0) ;
+
+	ri = twi_rx_ri;
+	data = TWI_rx_buffer[ri];
+	twi_rx_ri = (ri+1) & TWI_RX_BUFFER_MASK;
+	cli();
+	--twi_rx_cnt;
+	sei();
+
+	return data;
+}
+
+void twi_tx_byte(uint8_t data)
+{
+	uint8_t wi;
+
+	while (twi_tx_cnt >= TWI_TX_BUFFER_SIZE) ;
+
+	wi = twi_tx_wi;
+	TWI_tx_buffer[wi] = data;
+	cli();
+	++twi_tx_cnt;
+	sei();
+
+	twi_tx_wi = (wi+1) & TWI_TX_BUFFER_MASK;
+}
+
+
+int main()
+{
+	MCUSR = 0;
+
+	/*
+	  PB0 : SDA
+	  PB1 : AIN1
+	  PB2 : SCL
+	  PB3 : Output
+	  PB4 : Output
+	*/
+	PORTB = 0b00000101;
+	DDRB  = 0b00011101;
+
+	/* PB1(AIN1) Digital Input Disable */
+	DIDR0 = 0b00000010;
+
+	/* Analog Comparator Disable */
+	ACSR  = 0b10000000;
+
+	/* Powerdown : Timer1, Timer0, AD Converter */
+	PRR   = _BV(PRTIM1) | _BV(PRTIM0) | _BV(PRADC);
+
+
+	USI_TWI_Slave_Initialize();
+
+	sei();
+	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+
+	for (;;) {
+		sleep_mode();
+		if (!twi_rx_empty()) {
+			twi_tx_byte(twi_rx() + 1);
+		}
+	}
+}
