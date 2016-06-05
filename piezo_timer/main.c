@@ -77,7 +77,8 @@ volatile uint8_t *sdrp = seg_data;
 
 volatile uint8_t ac_blank;
 
-const uint16_t tone[4] = {3500, 4400, 4800, 4000};
+const uint8_t tone[4] = {125-1, 94-1, 62-1, 31-1};
+const uint8_t duty[4] = {62-1, 16-1, 16-1, 16-1};
 
 /*-----------------------------------------------------------------------*/
 /* Xorshift pseudo random generator                                      */
@@ -342,8 +343,8 @@ uint8_t run(void)
 
   TCCR0A = _BV(COM0B1) | _BV(WGM01) | _BV(WGM00);
   TCCR0B = 0;
-  OCR0A = (F_CPU / 64 / tone[PIND & 0x03]) - 1;
-  OCR0B = (F_CPU / 64 / tone[PIND & 0x03] / 2) - 1;
+  OCR0A = tone[PIND & 0x03];
+  OCR0B = duty[PIND & 0x03];
   TCNT0 = 0;
 
   cli();

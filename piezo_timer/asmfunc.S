@@ -198,8 +198,6 @@ TIMER2_COMPA_vect:
 	sts		counter, r24
 	sts		counter+1, r25
 
-	sbi		_SFR_IO_ADDR(PINC), 5
-
 	ldi		r24, 5
 
 ;  if (ac_blank && --ac_blank == 0) {
@@ -230,6 +228,10 @@ TIMER2_COMPA_vect:
 	lds		ZL, sdrp
 	lds		ZH, sdrp+1
 
+	in		r24, _SFR_IO_ADDR(PORTD);
+	andi	r24, 0b00110111
+	out		_SFR_IO_ADDR(PORTD), r24
+
 	in		r24, _SFR_IO_ADDR(PORTB)
 	andi	r24, 0b11111101
 	ori		r24, 0b00111101
@@ -244,7 +246,6 @@ TIMER2_COMPA_vect:
 	out		_SFR_IO_ADDR(PORTC), r24
 
 	in		r24, _SFR_IO_ADDR(PORTD)
-	andi	r24, 0b00110111
 	ori		r24, 0b00010100
 	ld		r25, Z+
 	and		r24, r25
