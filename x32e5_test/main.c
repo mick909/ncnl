@@ -2,10 +2,11 @@
 #include <avr/cpufunc.h>
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
+#include <util/delay.h>
 
 volatile uint32_t counter10ms;
 
-volatile uint8_t digits[4] = {0x28, 0xee, 0x32, 0xa2};
+volatile uint8_t digits[4] = {0x28, 0x28, 0x28, 0x28};
 volatile uint8_t col;
 
 /*         0 1 2 3 4 5 6 7 8 9
@@ -38,12 +39,21 @@ void setup_RC8M_LPM(void)
 
 void setup_RC32M_DIV4(void)
 {
+	OSC.XOSCCTRL = OSC_X32KLPM_bm | OSC_XOSCSEL_32KHz_gc;
+	OSC.CTRL |= OSC_XOSCEN_bm;
+	do { } while (!( OSC.STATUS & OSC_XOSCRDY_bm ));
+
 	/* Enable internal 32MHz ring oscillator, */
 	OSC.CTRL |= OSC_RC32MEN_bm;
 	clock_prescaler_select(CLK_PSADIV_4_gc | CLK_PSBCDIV_1_1_gc);
 
 	/* and wait until it's stable. */
 	do { } while (!( OSC.STATUS & OSC_RC32MRDY_bm ));
+
+	OSC.DFLLCTRL = OSC_RC32MCREF_XOSC32K_gc;
+	DFLLRC32M.COMP1 = 0x12;
+	DFLLRC32M.COMP2 = 0x7a;
+	DFLLRC32M.CTRL |= DFLL_ENABLE_bm;
 
 	/* set the 32MHz ring oscillator as the main clock source. */
 	main_clocksource_select(CLK_SCLKSEL_RC32M_gc);
@@ -156,16 +166,24 @@ int main(void)
 //	setup_RC8M_LPM();
 	OSC.CTRL &= ~OSC_RC2MEN_bm;
 
+	PORTC.PIN0CTRL = PORT_OPC_PULLUP_gc;
+
 	init_spi_led();
 
 	counter10ms = 0;
 
 	setupRTC_ULP();
-
-	setupTCC4_10ms();
-
 	/* Enable interrpts. */
 	PMIC.CTRL |= PMIC_HILVLEN_bm | PMIC_LOLVLEN_bm;
+	sei();
+
+	_delay_ms(1);
+	do {} while ( (PORTC.IN & PIN0_bm) == PIN0_bm );
+	_delay_ms(1);
+	do {} while ( (PORTC.IN & PIN0_bm) != PIN0_bm );
+
+	cli();
+	setupTCC4_10ms();
 
 //	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
 	set_sleep_mode(SLEEP_MODE_IDLE);

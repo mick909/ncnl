@@ -19,7 +19,7 @@ CSTD = gnu99
 LIBS	=
 LIBDIRS	=
 INCDIRS	=
-DEFS	= F_CPU=2000000
+DEFS	= F_CPU=8000000
 ADEFS	= $(DEFS)
 
 ### Warning contorls
