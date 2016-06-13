@@ -4,10 +4,15 @@
 #include <avr/sleep.h>
 #include <util/delay.h>
 
-volatile uint32_t counter10ms;
+volatile uint8_t counters[4] = {0};
+
+volatile uint16_t counter10ms;
 
 volatile uint8_t digits[4] = {0x28, 0x28, 0x28, 0x28};
 volatile uint8_t col;
+
+volatile uint8_t countms;
+volatile uint8_t chk;
 
 /*         0 1 2 3 4 5 6 7 8 9
           ---------------------
@@ -37,26 +42,48 @@ void setup_RC8M_LPM(void)
 	main_clocksource_select(CLK_SCLKSEL_RC8M_gc);
 }
 
-void setup_RC32M_DIV4(void)
+void setup_RC32M(void)
 {
+	/* Select 32.769kHz TOSC for external oscillator. */
 	OSC.XOSCCTRL = OSC_X32KLPM_bm | OSC_XOSCSEL_32KHz_gc;
+
+	/* Enable External Clock Sounrce and 32MHz Internal Oscillator. */
 	OSC.CTRL |= OSC_XOSCEN_bm;
+
+	/* wait until stable. */
 	do { } while (!( OSC.STATUS & OSC_XOSCRDY_bm ));
 
-	/* Enable internal 32MHz ring oscillator, */
-	OSC.CTRL |= OSC_RC32MEN_bm;
-	clock_prescaler_select(CLK_PSADIV_4_gc | CLK_PSBCDIV_1_1_gc);
-
-	/* and wait until it's stable. */
-	do { } while (!( OSC.STATUS & OSC_RC32MRDY_bm ));
-
+	/* Set DFLL parameters. */
 	OSC.DFLLCTRL = OSC_RC32MCREF_XOSC32K_gc;
 	DFLLRC32M.COMP1 = 0x12;
 	DFLLRC32M.COMP2 = 0x7a;
+
 	DFLLRC32M.CTRL |= DFLL_ENABLE_bm;
+
+	/* Enable External Clock Sounrce and 32MHz Internal Oscillator. */
+	OSC.CTRL |= OSC_RC32MEN_bm;
+	clock_prescaler_select(CLK_PSADIV_4_gc | CLK_PSBCDIV_1_1_gc);
+
+	/* wait until stable. */
+	do { } while (!( OSC.STATUS & OSC_RC32MRDY_bm ));
 
 	/* set the 32MHz ring oscillator as the main clock source. */
 	main_clocksource_select(CLK_SCLKSEL_RC32M_gc);
+}
+
+void setup_XOSC(void)
+{
+	/* Select 32.769kHz TOSC for external oscillator. */
+	OSC.XOSCCTRL = OSC_FRQRANGE_12TO16_gc | OSC_XOSCPWR_bm | OSC_XOSCSEL_XTAL_16KCLK_gc;
+
+	/* Enable External Clock Sounrce */
+	OSC.CTRL |= OSC_XOSCEN_bm;
+
+	/* wait until stable. */
+	do { } while (!( OSC.STATUS & OSC_XOSCRDY_bm ));
+
+	/* set the 32MHz ring oscillator as the main clock source. */
+	main_clocksource_select(CLK_SCLKSEL_XOSC_gc);
 }
 
 void init_spi_led(void)
@@ -115,22 +142,65 @@ ISR(TCC4_OVF_vect)
 {
 	TCC4.INTFLAGS = TC4_OVFIF_bm;	/* Must do this at XMEGA? */
 
-	uint32_t cnt = counter10ms + 1;
+	do {
+		uint8_t c1 = countms + 1;
+		if (c1 < 10) {
+			countms = c1;
+			break;
+		}
+		countms = 0;
 
-	if (cnt > 199999) cnt -= 100000;
-	counter10ms = cnt;
+		uint8_t ct = 1-chk;
+		chk = ct;
+		uint8_t t = ((PORTC.IN & PIN0_bm) == PIN0_bm) ? 0 : 1;
+		if (ct != t) {
+			TCC4.INTCTRLA = 0;
+			TCC4.CTRLA = 0;
+		}
 
-	cnt /= 10;
-	digits[3] = digit[cnt % 10];
+		uint16_t cnt = counter10ms + 1;
+		if (cnt < 10) {
+			counter10ms = cnt;
+			break;
+		}
+		counter10ms = 0;
 
-	cnt /= 10;
-	digits[2] = digit[cnt % 10];
+		uint8_t d = counters[3] + 1;
+		if (d < 10) {
+			counters[3] = d;
+			digits[3] = digit[d];
+			break;
+		}
+		counters[3] = 0;
+		digits[3] = digit[0];
 
-	cnt /= 10;
-	digits[1] = digit[cnt % 10];;
+		d = counters[2] + 1;
+		if (d < 10) {
+			counters[2] = d;
+			digits[2] = digit[d];
+			break;
+		}
+		counters[2] = 0;
+		digits[2] = digit[0];
 
-	cnt /= 10;
-	digits[0] = digit[cnt % 10];;
+		d = counters[1] + 1;
+		if (d < 10) {
+			counters[1] = d;
+			digits[1] = digit[d];
+			break;
+		}
+		counters[1] = 0;
+		digits[1] = digit[0];
+
+		d = counters[0] + 1;
+		if (d < 10) {
+			counters[0] = d;
+			digits[0] = digit[d];
+			break;
+		}
+		counters[0] = 0;
+		digits[0] = digit[0];
+	} while (0);
 }
 
 void setupRTC_ULP(void)
@@ -151,26 +221,27 @@ void setupRTC_ULP(void)
 	RTC.INTCTRL = RTC_OVFINTLVL_LO_gc;
 }
 
-void setupTCC4_10ms(void)
+void setupTCC4_1ms(void)
 {
 //	TCC4.CTRLB = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
 	TCC4.CNT = 0;
-	TCC4.PER = 1250 - 1;		/* 8MHz div64 / 1250 = 100hz */
+	TCC4.PER = 125 - 1;		/* 8MHz div64 / 125 = 1000hz */
+//	TCC4.PER = 12 - 1;		/* 12.288MHz div1024 / 12 = 1000hz */
 	TCC4.INTCTRLA = (uint8_t)TC45_OVFINTLVL_HI_gc;
 	TCC4.CTRLA = TC45_CLKSEL_DIV64_gc;
+//	TCC4.CTRLA = TC45_CLKSEL_DIV1024_gc;
 }
 
 int main(void)
 {
-	setup_RC32M_DIV4();
+	setup_RC32M();
 //	setup_RC8M_LPM();
+//	setup_XOSC();
 	OSC.CTRL &= ~OSC_RC2MEN_bm;
 
 	PORTC.PIN0CTRL = PORT_OPC_PULLUP_gc;
 
 	init_spi_led();
-
-	counter10ms = 0;
 
 	setupRTC_ULP();
 	/* Enable interrpts. */
@@ -179,11 +250,20 @@ int main(void)
 
 	_delay_ms(1);
 	do {} while ( (PORTC.IN & PIN0_bm) == PIN0_bm );
-	_delay_ms(1);
-	do {} while ( (PORTC.IN & PIN0_bm) != PIN0_bm );
 
 	cli();
-	setupTCC4_10ms();
+	countms = 0;
+	setupTCC4_1ms();
+	sei();
+
+	do {} while (countms < 5);
+
+	cli();
+	countms = 0;
+	counter10ms = 0;
+	chk = 0;
+	setupTCC4_1ms();
+	sei();
 
 //	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
 	set_sleep_mode(SLEEP_MODE_IDLE);
