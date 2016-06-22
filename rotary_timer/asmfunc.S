@@ -161,9 +161,9 @@ ANALOG_COMP_vect:
 ;
 ; ISR(TIMER2_COMPA_vect);
 
-;.global TIMER2_COMPA_vect
-;.func TIMER2_COMPA_vect
-;TIMER2_COMPA_vect:
+.global TIMER2_COMPA_vect
+.func TIMER2_COMPA_vect
+TIMER2_COMPA_vect:
 	push	r24
 	in		r24, _SFR_IO_ADDR(SREG)
 	push	r24
@@ -202,19 +202,47 @@ ANALOG_COMP_vect:
 
 	sei
 
-	ldi		r25, 0
 	lds		ZL, row
 	subi	ZL, 1
 	brcc	2f
 	ldi		ZL, 3
-	ldi		r25, 1
 2:
 	sts		row, ZL
 	clr		ZH
 	subi	ZL, lo8(-(seg_data))
 	sbci	ZH, hi8(-(seg_data))
 	ld		r24, Z
-	rcall	output_spi_led
+
+	lds		r25, row
+	cpi		r25, 2
+	brne	3f
+	lds		r25, dot
+	or		r25, r25
+	breq	3f
+	andi	r24, 0b11011111
+3:
+	ldi		ZL, 0b01010000
+	ldi		ZH,	0b00000001
+	out		_SFR_IO_ADDR(SPCR), ZL
+	out		_SFR_IO_ADDR(SPSR), ZH
+
+	out		_SFR_IO_ADDR(SPDR), r24
+
+4:
+	in		r24, _SFR_IO_ADDR(SPSR)
+	andi	r24, 0b10000000
+	breq	4b
+
+	clr		r24
+	out		_SFR_IO_ADDR(SPCR), r24
+
+	cbi		_SFR_IO_ADDR(PORTB), 3
+	lds		r24, row
+	cpi		r24, 3
+	brne	9f
+	sbi		_SFR_IO_ADDR(PORTB), 3
+9:	sbi		_SFR_IO_ADDR(PINB), 4
+	sbi		_SFR_IO_ADDR(PINB), 4
 
 	pop		ZH
 	pop		ZL
@@ -223,4 +251,4 @@ ANALOG_COMP_vect:
 	out		_SFR_IO_ADDR(SREG), r24
 	pop		r24
 	reti
-;.endfunc
+.endfunc

@@ -19,10 +19,10 @@
   PB6 : xtal
   PB7 : xtal
 
-  PC0 : L-A      : Out-High
-  PC1 : L-B      : Out-High
-  PC2 : H-A      : Out-High
-  PC3 : H-B      : Out-High
+  PC0 : L-A      : In-PU
+  PC1 : L-B      : In-PU
+  PC2 : H-A      : In-PU
+  PC3 : H-B      : In-PU
   PC4 : NC       : Out-Low
   PC5 : NC       : Out-Low
   PC6 : reset
@@ -102,38 +102,23 @@ ISR(PCINT2_vect)
   PCMSK2 = 0;
 }
 
-ISR(TIMER2_COMPA_vect)
-{
-  if (--count5 == 0) {
-    count5 = 5;
-    counter += 1;
-  }
-
-  if (row == 0) {
-    row = 3;
-    output_spi_led(seg_data[3], 1);
-  } else {
-    output_spi_led(seg_data[--row], 0);
-  }
-}
-
 /*-----------------------------------------------------------------------*/
 /* LED-Drive                                                             */
 /*-----------------------------------------------------------------------*/
 
-/*         0 1 2 3 4 5 6 7 8 9
+/*         0 1 2 3 4 5 6 7 8 9  A b C d E F
           ---------------------
-  Q7 : e   0 1 0 1 1 1 0 1 0 1
-  Q6 : d   0 1 0 0 1 0 0 1 0 0
-  Q5 : DP  1 1 1 1 1 1 1 1 1 1
-  Q4 : c   0 0 1 0 0 0 0 0 0 0
-  Q3 : g   1 1 0 0 0 0 0 1 0 0
-  Q2 : a   0 1 0 0 1 0 0 0 0 0
-  Q1 : f   0 1 1 1 0 0 0 1 0 0
-  Q0 : b   0 0 0 0 0 1 1 0 0 0
+  Q7 : e   0 1 0 1 1 1 0 1 0 1  0 0 0 0 0 0
+  Q6 : d   0 1 0 0 1 0 0 1 0 0  1 0 0 0 0 1
+  Q5 : DP  1 1 1 1 1 1 1 1 1 1  1 1 1 1 1 1
+  Q4 : c   0 0 1 0 0 0 0 0 0 0  0 0 1 0 1 1
+  Q3 : g   1 1 0 0 0 0 0 1 0 0  0 0 0 0 0 0
+  Q2 : a   0 1 0 0 1 0 0 0 0 0  0 1 0 1 0 0
+  Q1 : f   0 1 1 1 0 0 0 1 0 0  0 0 0 1 0 0
+  Q0 : b   0 0 0 0 0 1 1 0 0 0  0 1 1 0 1 1
 */
 
-volatile const uint8_t seg_font[] = { 0x28, 0xee, 0x32, 0xa2, 0xe4, 0xa1, 0x21, 0xea, 0x20, 0xa0};
+volatile const uint8_t seg_font[] = { 0x28, 0xee, 0x32, 0xa2, 0xe4, 0xa1, 0x21, 0xea, 0x20, 0xa0, 0x60, 0x25, 0x31, 0x26, 0x31, 0x71 };
 
 void init_spi_led(void)
 {
@@ -232,14 +217,17 @@ uint8_t idle(void)
   uint8_t count_pos;
   uint8_t s1_status = 0xff;
   uint8_t s2_status = 0xff;
+  uint8_t r1_status = PINC & 0x03;
+  uint8_t r2_status = (PINC >> 2) & 0x03;
+  uint8_t rcnt = 2;
 
   TIMSK2 = 0;
   TCCR2A = TCCR2B = 0;
 
-  /* 1/32 Clock */
+  /* 1/16 Clock */
   cli();
   CLKPR = _BV(CLKPCE);
-  CLKPR = 0b0101;
+  CLKPR = 0b0100;
 
   counter = 0;
   prev = 0;
@@ -251,8 +239,8 @@ uint8_t idle(void)
   set_display(counts[count_pos]);
   dot = 1;
 
-  /* TC2 : 4ms Interval Interrupt */
-  OCR2A  = 125-1;   /* (F_CPU / 32 / 8 / 1000 * 4) */
+  /* TC2 : 2ms Interval Interrupt */
+  OCR2A  = 125-1;   /* (F_CPU / 16 / 8 / 125= 500Hz (2ms)) */
   TCCR2A = 0b010;
   TCCR2B = 0b010;
   TIMSK2 = _BV(OCIE2A);
@@ -267,7 +255,29 @@ uint8_t idle(void)
     tmp = counter;
     sei();
 
-    /* check 20ms interval */
+    // check every 2ms
+    {
+      r1_status = (r1_status << 2) + (PINC & 0x03);
+      if ( (r1_status & 0x0f) == 0x08 ) {
+        par_count = par_count + ((par_count + 10) % 100) - (par_count % 100);
+        set_display(par_count);
+      } else if ( (r1_status & 0x0f) == 0x02 ) {
+        par_count = par_count + ((par_count + 90) % 100) - (par_count % 100);
+        set_display(par_count);
+      }
+
+      r2_status = (r2_status << 2) + ((PINC >> 2) & 0x03);
+      if ( (r2_status & 0x0f) == 0x08 ) {
+        par_count = par_count + ((par_count + 100) % 10000) - (par_count % 10000);
+        set_display(par_count);
+      } else if ( (r2_status & 0x0f) == 0x02 ) {
+        par_count = par_count + ((par_count + 9900) % 10000) - (par_count % 10000);
+        set_display(par_count);
+      }
+
+    }
+
+    /* check 10ms interval */
     if (tmp != prev) {
       prev = tmp;
 
@@ -293,7 +303,7 @@ uint8_t idle(void)
       }
 
       /* 3min -> enter deep sleep */
-      if (prev >= 18000 / 2) {
+      if (prev >= 18000) {
         return 1;
       }
     }
@@ -471,12 +481,10 @@ int main (void)
   DDRB  = 0b00111111;
 
   PORTC = 0b00001111;
-  DDRC  = 0b00111111;
+  DDRC  = 0b00110000;
 
   PORTD = 0b00011111;
   DDRD  = 0b01100000;
-
-  DIDR0  = 0b00000010;
 
   init_spi_led();
 
@@ -487,9 +495,9 @@ int main (void)
 
   count5 = 5;
   counter = 0;
+  par_count = 0;
 
-  count_num = 1;
-  counts[1] = 1234;
+  count_num = 0;
 
   sei();
 
