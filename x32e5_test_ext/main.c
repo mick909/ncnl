@@ -35,11 +35,21 @@ TCC5
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
 #include <util/delay.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "ff.h"
+#include "diskio.h"
+#include "sdaudio.h"
+
+extern
+uint8_t Timer1, Timer2;	/* 100Hz decrement timer */
 
 volatile uint16_t count = 0;
-volatile uint8_t digits[4] = {0x3f, 0x28, 0x28, 0x28};
+volatile uint8_t digits[4] = {0xff, 0xff, 0xff, 0xff};
 
 /* 16KHz Sampling, 400Hz sine wave */
+/*
 const uint8_t sin_400Hz_16KHz[] = {
 	128, 148, 167, 186, 203, 218, 231, 241,
 	249, 253, 255, 253, 249, 241, 231, 218,
@@ -49,6 +59,7 @@ const uint8_t sin_400Hz_16KHz[] = {
 };
 
 #define SIN_400Hz_16KHz_NUM (40)
+*/
 
 /*         0 1 2 3 4 5 6 7 8 9
           ---------------------
@@ -78,23 +89,13 @@ void setup_XOSC(void)
 	/* wait until stable. */
 	do { } while (!( OSC.STATUS & OSC_XOSCRDY_bm ));
 
+	OSC.PLLCTRL = OSC_PLLSRC_XOSC_gc + 2;
+
+	OSC.CTRL |= OSC_PLLEN_bm;
+	do { } while (!( OSC.STATUS & OSC_PLLRDY_bm ));
+
 	/* set the External Clock as the main clock source. */
-	main_clocksource_select(CLK_SCLKSEL_XOSC_gc);
-}
-
-volatile const uint8_t* wave_buff;
-volatile uint8_t wave_len;
-volatile uint8_t wave_pt;
-
-ISR(TCD5_OVF_vect)
-{
-	TCD5.INTFLAGS = TC5_OVFIF_bm;
-
-//	PORTA.OUTTGL = PIN2_bm;
-
-	DACA.CH0DATAL = 0;
-	DACA.CH0DATAH = *(wave_buff + wave_pt);
-	if (++wave_pt >= wave_len) wave_pt = 0;
+	main_clocksource_select(CLK_SCLKSEL_PLL_gc);
 }
 
 ISR(TCC5_OVF_vect)
@@ -121,6 +122,13 @@ ISR(TCC4_OVF_vect)
 	} else {
 		digits[3] = digit[count % 10];
 	}
+
+	uint8_t n;
+
+	n = Timer1;				/* 100Hz decrement timer */
+	if (n) Timer1 = --n;
+	n = Timer2;
+	if (n) Timer2 = --n;
 }
 
 ISR(TCC4_CCA_vect)
@@ -173,39 +181,59 @@ void setupTCC4_10ms(void)
 	/* Interrupt at 25, 150, 275, 400 (Level = Lo) */
 	TCC4.CTRLB = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
 	TCC4.CNT = 0;
-	TCC4.PER = 500 - 1;		/* 12.8MHz div256 / 500 = 100hz */
-	TCC4.CCA = 25 - 1;
-	TCC4.CCB = 150 - 1;
-	TCC4.CCC = 275 - 1;
-	TCC4.CCD = 400 - 1;
+	TCC4.PER = 500*2 - 1;		/* 12.8MHz div256 / 500 = 100hz */
+	TCC4.CCA =  25*2 - 1;
+	TCC4.CCB = 150*2 - 1;
+	TCC4.CCC = 275*2 - 1;
+	TCC4.CCD = 400*2 - 1;
 	TCC4.INTCTRLA = TC45_OVFINTLVL_MED_gc;
 	TCC4.INTCTRLB = TC45_CCDINTLVL_LO_gc | TC45_CCCINTLVL_LO_gc | TC45_CCBINTLVL_LO_gc | TC45_CCAINTLVL_LO_gc;
 	TCC4.INTFLAGS = TC4_CCDIF_bm | TC4_CCCIF_bm | TC4_CCBIF_bm | TC4_CCAIF_bm | TC4_OVFIF_bm;
 	TCC4.CTRLA = TC45_CLKSEL_DIV256_gc;
 }
 
-void output_wave(const uint8_t* const wave, const uint8_t len)
+FRESULT scan_files(char* path)
 {
-	wave_buff = wave;
-	wave_len = len;
-	wave_pt = 0;
+	FRESULT res;
+	FILINFO fno;
+	FIL fp;
+	DIR dir;
+	int i, j;
+	char *fn;
 
-	DACA.CTRLB = DAC_CHSEL_SINGLE_gc;
-	DACA.CTRLC = DAC_REFSEL_AVCC_gc | DAC_LEFTADJ_bm;
-	DACA.CTRLA = DAC_CH0EN_bm | DAC_ENABLE_bm;
-	DACA.CH0DATA = 128 << 4;
+	res = f_opendir(&dir, path);
+	if (res == FR_OK) {
 
-	/* 12.8MHz / 800 = 16,000Hz */
-	TCD5.CTRLB = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
-	TCD5.CNT = 0;
-	TCD5.PER = 800-1;
-	TCD5.INTCTRLA = TC45_OVFINTLVL_HI_gc;
-	TCD5.INTFLAGS = TC5_OVFIF_bm;
-	TCD5.CTRLA = TC45_CLKSEL_DIV1_gc;
+		i = strlen(path);
+
+		for (;;) {
+			res = f_readdir(&dir, &fno);
+			fn = fno.fname;
+
+			if (res || !fn[0]) { break; }
+			if (fn[0] == '.' || fn[0] == '_') { continue; }
+
+			j = strlen(fn);
+			if (j < 4) continue;
+			if (fn[j-4] != '.' || fn[j-3] != 'W' || fn[j-2] != 'A' || fn[j-1] != 'V') continue;
+
+			sprintf(&path[i], "/%s", fn);
+			res = f_open(&fp, path, FA_OPEN_EXISTING | FA_READ);
+			if (res == FR_OK) {
+				playfile(&fp);
+			}
+			path[i] = 0;
+		}
+	} else {
+	}
+	return res;
 }
 
 int main(void)
 {
+	FATFS fs;
+	char path[64];
+
 	setup_XOSC();
 	OSC.CTRL &= ~OSC_RC2MEN_bm;
 
@@ -219,11 +247,16 @@ int main(void)
 
 	setupTCC4_10ms();
 
-	output_wave(sin_400Hz_16KHz, SIN_400Hz_16KHz_NUM);
+//	output_wave(sin_400Hz_16KHz, SIN_400Hz_16KHz_NUM);
 
 	/* Enable interrpts. */
 	PMIC.CTRL |= PMIC_HILVLEN_bm | PMIC_MEDLVLEN_bm | PMIC_LOLVLEN_bm;
 	sei();
+
+	f_mount(&fs, "", 0);
+
+	strcpy(path, "0:");
+	scan_files(path);
 
 	do {} while (1);
 }
