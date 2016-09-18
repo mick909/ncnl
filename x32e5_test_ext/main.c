@@ -95,29 +95,9 @@ void setup_XOSC(void)
 #endif
 }
 
-ISR(TCC5_OVF_vect)
-{
-	TCC5.INTFLAGS = TC5_OVFIF_bm;
-	TCC5.CNT = TCC5.CNT + 10000;
-}
-
 ISR(TCC4_OVF_vect)
 {
 	TCC4.INTFLAGS = TC4_OVFIF_bm;
-
-	count = TCC5.CNT;
-
-	digits[0] = digit[count % 10];
-	count /= 10;
-	digits[1] = digit[count % 10];
-	count /= 10;
-	digits[2] = digit[count % 10] & 0x7f;
-	count /= 10;
-	if (count == 0) {
-		digits[3] = 0xff;
-	} else {
-		digits[3] = digit[count % 10];
-	}
 
 	uint8_t n;
 
@@ -125,31 +105,21 @@ ISR(TCC4_OVF_vect)
 	if (n) Timer1 = --n;
 	n = Timer2;
 	if (n) Timer2 = --n;
-}
 
-ISR(TCC4_CCA_vect)
-{
-	PORTA.OUTCLR = PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm;
-	PORTC.OUT = digits[0];
-	PORTA.OUTSET = PIN4_bm;
-}
-ISR(TCC4_CCB_vect)
-{
-	PORTA.OUTCLR = PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm;
-	PORTC.OUT = digits[1];
-	PORTA.OUTSET = PIN5_bm;
-}
-ISR(TCC4_CCC_vect)
-{
-	PORTA.OUTCLR = PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm;
-	PORTC.OUT = digits[2];
-	PORTA.OUTSET = PIN6_bm;
-}
-ISR(TCC4_CCD_vect)
-{
-	PORTA.OUTCLR = PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm;
-	PORTC.OUT = digits[3];
-	PORTA.OUTSET = PIN7_bm;
+	uint16_t cnt = TCC5.CNT;
+	count = cnt;
+
+	digits[0] = digit[cnt % 10];
+	cnt /= 10;
+	digits[1] = digit[cnt % 10];
+	cnt /= 10;
+	digits[2] = digit[cnt % 10] & 0x7f;
+	cnt /= 10;
+	if (cnt == 0) {
+		digits[3] = 0xff;
+	} else {
+		digits[3] = digit[cnt % 10];
+	}
 }
 
 void setupTCC4_10ms(void)

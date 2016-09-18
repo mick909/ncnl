@@ -83,7 +83,7 @@ void power_on (void)
 
 	USARTD0.CTRLC = USART_CMODE_MSPI_gc;	/* SPI Mode 0, MSB first */
 
-	USARTD0.CTRLB = USART_TXEN_bm | USART_RXEN_bm | USART_CLK2X_bm;
+	USARTD0.CTRLB = USART_TXEN_bm | USART_RXEN_bm; // | USART_CLK2X_bm;
 
 	USARTD0.BAUDCTRLA = 1;
 }

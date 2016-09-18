@@ -1,5 +1,6 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <avr/sleep.h>
 
 #include "sdaudio.h"
 #include "ff.h"
@@ -42,50 +43,6 @@ void stopplayisr(void)
 
 	TCD5.INTCTRLA = 0;
 	TCD5.CTRLA = TC45_CLKSEL_OFF_gc;
-}
-
-ISR(TCD5_OVF_vect)
-{
-	UINT ri, ct;
-	BYTE *buff;
-	uint16_t d;
-	TCD5.INTFLAGS = TC5_OVFIF_bm;
-
-	ct = fifo_ct;
-	ri = fifo_ri;
-	buff = buffer + ri;
-
-	if (resolution == 8 && channel == 1) {
-		if (ct < 1) return;
-		d = (uint16_t)(*buff) << 8;
-		ct -= 1; ri += 1;
-		DACA.CH0DATA = d;
-	} else
-	if (resolution == 16 && channel == 1) {
-		if (ct < 2) return;
-		d = *buff++ & 0xf0;
-		d += (uint16_t)(*buff + 128) << 8;
-		ct -= 2; ri += 2;
-		DACA.CH0DATA = d;
-	} else
-	if (resolution == 8 && channel == 2) {
-		if (ct < 2) return;
-		d = ((uint16_t)(*buff++)) << 7;
-		d += ((uint16_t)(*buff)) << 7;
-		ct -= 2; ri += 2;
-		DACA.CH0DATA = d;
-	} else {
-		if (ct < 4) return;
-		d = (((uint16_t)(*buff++)) << 7);
-		d += ((uint16_t)(*buff++) >> 1);
-		d += (((uint16_t)(*buff++))<< 7);
-		d += ((uint16_t)(*buff) >> 1);
-		ct -= 4; ri += 4;
-		DACA.CH0DATA = d & 0xfff0;
-	}
-
-	fifo_ct = ct;
-	fifo_ri = ri & (BUFFER_SIZE-1);
 }
 
 static
@@ -177,7 +134,10 @@ uint8_t playfile(FIL* fp)
 
 	startplayisr();
 
+	set_sleep_mode(SLEEP_MODE_IDLE);
 	while (size || fifo_ct >= 4) {
+		sleep_mode();
+
 		if (size && fifo_ct <= (BUFFER_SIZE/2)) {
 			rsize = (size >= (BUFFER_SIZE/2)) ? (BUFFER_SIZE/2) : size;
 			PORTD.OUTSET = PIN3_bm;
