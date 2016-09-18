@@ -4,22 +4,20 @@
 #include "sdaudio.h"
 #include "ff.h"
 
+#define PLL_SCALE (1)
+
 #define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
 
-uint8_t buffer[512];
+#define BUFFER_SIZE (2048)
 
-volatile uint8_t playb;
-volatile uint8_t playidx;
-volatile UINT playcnt;
+BYTE buffer[BUFFER_SIZE];
+
+volatile UINT fifo_ct;
+volatile UINT fifo_ri;
 
 volatile uint16_t freq;
 volatile uint8_t channel;
 volatile uint8_t resolution;
-
-volatile uint8_t readb;
-volatile UINT readcnt;
-
-volatile uint8_t cnt;
 
 void startplayisr(void)
 {
@@ -30,7 +28,7 @@ void startplayisr(void)
 
 	TCD5.CTRLB = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
 	TCD5.CNT = 0;
-	TCD5.PER = freq *2 - 1;
+	TCD5.PER = freq * PLL_SCALE - 1;
 	TCD5.INTCTRLA = TC45_OVFINTLVL_HI_gc;
 	TCD5.INTFLAGS = TC5_OVFIF_bm;
 	TCD5.CTRLA = TC45_CLKSEL_DIV1_gc;
@@ -46,87 +44,48 @@ void stopplayisr(void)
 	TCD5.CTRLA = TC45_CLKSEL_OFF_gc;
 }
 
-static uint8_t get_byte(void)
-{
-	uint8_t i, d;
-	uint8_t pb;
-	UINT n;
-
-	i = playidx;
-	n = playcnt;
-	pb = playb;
-
-	if (!n) {
-		return 128;
-	}
-
-	d = buffer[((uint16_t)pb << 8) + i++];
-
-	if (!--n) {
-		if (pb == readb) {
-			playb = 1-pb;
-			i =0;
-			n = readcnt;
-		}
-	}
-
-	playidx = i;
-	playcnt = n;
-
-	return d;
-}
-
-static uint16_t get_word(void)
-{
-	uint8_t i, dh, dl;
-	uint8_t pb;
-	UINT n;
-
-	i = playidx;
-	n = playcnt;
-	pb = playb;
-
-	if (n < 2) {
-		return 0x8000;
-	}
-
-	dl = buffer[((uint16_t)pb << 8) + i++];
-	dh = buffer[((uint16_t)pb << 8) + i++] + 0x80;
-	n -= 2;
-	if (!n) {
-		if (pb == readb) {
-			playb = 1-pb;
-			i =0;
-			n = readcnt;
-		}
-	}
-
-	playidx = i;
-	playcnt = n;
-
-	return ((uint16_t)dh<<8) + (uint16_t)dl;
-}
-
 ISR(TCD5_OVF_vect)
 {
-	uint8_t dh;
+	UINT ri, ct;
+	BYTE *buff;
 	uint16_t d;
 	TCD5.INTFLAGS = TC5_OVFIF_bm;
 
-	if (resolution == 8) {
-		dh = get_byte();
-		if (channel == 2) {
-			dh = (dh >> 1) + (get_byte() >> 1);
-		}
-		DACA.CH0DATAL = 0;
-		DACA.CH0DATAH = dh;
-	} else {
-		d = get_word();
-		if (channel == 2) {
-			d = (d >> 1) + (get_word() >> 1);
-		}
+	ct = fifo_ct;
+	ri = fifo_ri;
+	buff = buffer + ri;
+
+	if (resolution == 8 && channel == 1) {
+		if (ct < 1) return;
+		d = (uint16_t)(*buff) << 8;
+		ct -= 1; ri += 1;
 		DACA.CH0DATA = d;
+	} else
+	if (resolution == 16 && channel == 1) {
+		if (ct < 2) return;
+		d = *buff++ & 0xf0;
+		d += (uint16_t)(*buff + 128) << 8;
+		ct -= 2; ri += 2;
+		DACA.CH0DATA = d;
+	} else
+	if (resolution == 8 && channel == 2) {
+		if (ct < 2) return;
+		d = ((uint16_t)(*buff++)) << 7;
+		d += ((uint16_t)(*buff)) << 7;
+		ct -= 2; ri += 2;
+		DACA.CH0DATA = d;
+	} else {
+		if (ct < 4) return;
+		d = (((uint16_t)(*buff++)) << 7);
+		d += ((uint16_t)(*buff++) >> 1);
+		d += (((uint16_t)(*buff++))<< 7);
+		d += ((uint16_t)(*buff) >> 1);
+		ct -= 4; ri += 4;
+		DACA.CH0DATA = d & 0xfff0;
 	}
+
+	fifo_ct = ct;
+	fifo_ri = ri & (BUFFER_SIZE-1);
 }
 
 static
@@ -183,55 +142,58 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 
 uint8_t playfile(FIL* fp)
 {
-	FRESULT res;
 	DWORD size;
 	UINT rsize;
 	UINT rb;
+	UINT wi;
+
+	PORTD.DIRSET = PIN3_bm;
+	PORTD.OUTCLR = PIN3_bm;
 
 	size = loadheader(fp);
-	if (size < 1024) return 8;
 
-	res = f_read(fp, buffer, 256 - (fp->fptr % 256) , &rb);
+	wi = 0;
+
+	UINT pad = 512 - (fp->fptr % 512);
+	if (pad) {
+		fifo_ri = BUFFER_SIZE - pad;
+
+		f_read(fp, &buffer[fifo_ri], pad, &rb);
+		if (pad != rb) return 1;
+		fifo_ct = rb;
+		size -= rb;
+	} else {
+		fifo_ct = 0;
+		fifo_ri = 0;
+	}
+
+	rsize = BUFFER_SIZE / 2;
+	f_read(fp, &buffer[0], rsize, &rb);
+	if (rb != rsize) return 2;
+
 	size -= rb;
-	playcnt = rb;
-	if (res != FR_OK) return 2;
-
-	res = f_read(fp, buffer+256, 256, &rb);
-	size -= rb;
-	readcnt = rb;
-	if (res != FR_OK || rb != 256) return 3;
-
-	playb = readb = 0;
-	playidx = 0;
+	wi += rb;
+	fifo_ct += rb;
 
 	startplayisr();
 
-	for (;;) {
-		uint8_t p, r;
-		do {
+	while (size || fifo_ct >= 4) {
+		if (size && fifo_ct <= (BUFFER_SIZE/2)) {
+			rsize = (size >= (BUFFER_SIZE/2)) ? (BUFFER_SIZE/2) : size;
+			PORTD.OUTSET = PIN3_bm;
+			f_read(fp, &buffer[wi], rsize, &rb);
+			PORTD.OUTCLR = PIN3_bm;
+			if (rb != rsize) break;
+			size -= rb;
+			wi = (wi + rb) & (BUFFER_SIZE-1);
 			cli();
-			p = playb;
-			r = readb;
+			fifo_ct += rb;
 			sei();
-		} while (p == r);
-
-		rsize = (size > 256) ? 256 : (UINT)size;
-		res  = f_read(fp, buffer + ((uint16_t)readb << 8), rsize, &rb);
-		if (res != FR_OK) break;
-
-		size -= rb;
-
-		cli();
-		readb = playb;
-		readcnt = rb;
-		sei();
-
-		if (rb != 256) break;
+		}
 	}
 
-	while (playcnt) {};
-
 	stopplayisr();
+	f_close(fp);
 
 	return 9;
 }

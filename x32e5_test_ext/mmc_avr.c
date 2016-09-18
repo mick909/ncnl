@@ -94,7 +94,7 @@ void power_off (void)
 	USARTD0.BAUDCTRLA = 0;
 	USARTD0.CTRLB = 0;
 
-	PORTD.OUTCLR = PIN4_bm;
+	PORTD.OUTSET = PIN4_bm;
 
 	Stat |= STA_NOINIT;
 }

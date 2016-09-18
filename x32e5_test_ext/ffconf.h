@@ -39,7 +39,7 @@
 /  f_findfirst() and f_findnext(). (0:Disable or 1:Enable) */
 
 
-#define	_USE_MKFS		1
+#define	_USE_MKFS		0
 /* This option switches f_mkfs() function. (0:Disable or 1:Enable) */
 
 
@@ -47,12 +47,12 @@
 /* This option switches fast seek feature. (0:Disable or 1:Enable) */
 
 
-#define _USE_LABEL		1
+#define _USE_LABEL		0
 /* This option switches volume label functions, f_getlabel() and f_setlabel().
 /  (0:Disable or 1:Enable) */
 
 
-#define	_USE_FORWARD	0
+#define	_USE_FORWARD	1
 /* This option switches f_forward() function. (0:Disable or 1:Enable)
 /  To enable it, also _FS_TINY need to be set to 1. */
 
@@ -124,7 +124,7 @@
 /  When _LFN_UNICODE is 0, this option has no effect. */
 
 
-#define _FS_RPATH	2
+#define _FS_RPATH	0
 /* This option configures relative path feature.
 /
 /   0: Disable relative path feature and remove related functions.
@@ -138,7 +138,7 @@
 / Drive/Volume Configurations
 /---------------------------------------------------------------------------*/
 
-#define _VOLUMES	2
+#define _VOLUMES	1
 /* Number of volumes (logical drives) to be used. */
 
 
