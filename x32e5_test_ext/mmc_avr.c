@@ -183,8 +183,8 @@ void rcvr_spi_multi (
 	EDMA.CH2.TRFCNTL =  cnt       & 0xff;
 	EDMA.CH2.TRFCNTH = (cnt >> 8) & 0xff;
 
-	EDMA.CH0.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
 	EDMA.CH2.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
+	EDMA.CH0.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
 
 	while ( !(EDMA.INTFLAGS & EDMA_CH0TRNFIF_bm) ) {}
 
