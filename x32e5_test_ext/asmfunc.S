@@ -154,16 +154,19 @@ stereo:
 
 	ld		r24, Z+
 	ld		r25, Z+
+	subi	r25, 0x80
 	lsr		r25
 	ror		r24
 
 	ld		r26, Z+
 	ld		r27, Z+
+	subi	r27, 0x80
 	lsr		r27
 	ror		r26
 
 	add		r24, r26
 	adc		r25, r27
+	andi	r24, 0xf0
 
 	sts		DACA_CH0DATA+1, r25
 	sts		DACA_CH0DATA,   r24

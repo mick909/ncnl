@@ -19,6 +19,8 @@
 #define CS_LOW()	PORTD.OUTCLR = PIN4_bm;		/* CS=low */
 #define	CS_HIGH()	PORTD.OUTSET = PIN4_bm;		/* CS=high */
 
+#define FCLK_SLOW()	USARTD0.BAUDCTRLA = 63;
+#define FCLK_HIGH() USARTD0.BAUDCTRLA = 0;
 
 /*--------------------------------------------------------------------------
 
@@ -67,34 +69,41 @@ BYTE CardType;			/* Card type flags */
 static
 void power_on (void)
 {
-	// SCK  = PD5 = Out,lo
-	// MISO = PD6 = In, hi-z
-	// MOSI = PD7 = Out,hi
-	// SS   = PD4 = Out,hi
+	/* SS   = PD4 = Out,hi   */
+	/* SCK  = PD5 = Out,lo   */
+	/* MISO = PD6 = In, hi-z */
+	/* MOSI = PD7 = Out,hi   */
 
-	PORTD.OUTSET = PIN4_bm | PIN7_bm;
+	PORTD.DIRSET   = PIN4_bm;
+	PORTD.OUTSET   = PIN4_bm;
+
+	PORTD.DIRSET = PIN5_bm | PIN7_bm;
 	PORTD.OUTCLR = PIN5_bm;
-	PORTD.DIRSET = PIN4_bm | PIN5_bm | PIN7_bm;
+	PORTD.OUTSET = PIN7_bm;
+
 	PORTD.DIRCLR = PIN6_bm;
+
 	PORTD.REMAP = PORT_USART0_bm;
 
-	USARTD0.BAUDCTRLB = 0;
-	USARTD0.BAUDCTRLA = 0;
-
+	/* Setup USART D0 as MSPI mode */
 	USARTD0.CTRLC = USART_CMODE_MSPI_gc;	/* SPI Mode 0, MSB first */
+	USARTD0.CTRLB = USART_TXEN_bm | USART_RXEN_bm;
+	USARTD0.BAUDCTRLA = 63;
 
-	USARTD0.CTRLB = USART_TXEN_bm | USART_RXEN_bm; // | USART_CLK2X_bm;
-
-	USARTD0.BAUDCTRLA = 1;
+	/* Setup DMA for USART SPI */
+	EDMA.CTRL = EDMA_ENABLE_bm | EDMA_CHMODE_STD02_gc
+			   | EDMA_DBUFMODE_DISABLE_gc | EDMA_PRIMODE_CH0123_gc;
 }
 
 static
 void power_off (void)
 {
 	USARTD0.BAUDCTRLA = 0;
-	USARTD0.CTRLB = 0;
+	USARTD0.CTRLB     = 0;
 
 	PORTD.OUTSET = PIN4_bm;
+
+	EDMA.CTRL = 0;
 
 	Stat |= STA_NOINIT;
 }
@@ -141,20 +150,45 @@ void xmit_spi_multi (
 static
 void rcvr_spi_multi (
 	BYTE *p,	/* Data buffer */
-	UINT cnt	/* Size of data block (must be multiple of 2) */
+	UINT cnt	/* Size of data block */
 )
 {
-	do {
-		while ( !(USARTD0.STATUS & USART_DREIF_bm));
-		USARTD0.DATA = 0xff;
-		while ( !(USARTD0.STATUS & USART_RXCIF_bm));
-		*p++ = USARTD0.DATA;
+	volatile uint8_t dmy = 0xff;
 
-		while ( !(USARTD0.STATUS & USART_DREIF_bm));
-		USARTD0.DATA = 0xff;
-		while ( !(USARTD0.STATUS & USART_RXCIF_bm));
-		*p++ = USARTD0.DATA;
-	} while (cnt -= 2);
+	/* DMA Chennel0 -> Transfer from USARTD0.Data to buffer */
+	EDMA.CH0.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
+	EDMA.CH0.DESTADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
+	EDMA.CH0.TRIGSRC  = EDMA_CH_TRIGSRC_USARTD0_RXC_gc;
+
+	EDMA.CH0.ADDRL =  (uint16_t)(&USARTD0.DATA)       & 0xff;
+	EDMA.CH0.ADDRH = ((uint16_t)(&USARTD0.DATA) >> 8) & 0xff;
+
+	EDMA.CH0.DESTADDRL =  (uint16_t)p       & 0xff;
+	EDMA.CH0.DESTADDRH = ((uint16_t)p >> 8) & 0xff;
+
+	EDMA.CH0.TRFCNTL =  cnt       & 0xff;
+	EDMA.CH0.TRFCNTH = (cnt >> 8) & 0xff;
+
+	/* DMA Chennel2 -> Transfer dummy 0xff to USARTD0.Data */
+	EDMA.CH2.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
+	EDMA.CH2.DESTADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
+	EDMA.CH2.TRIGSRC  = EDMA_CH_TRIGSRC_USARTD0_DRE_gc;
+
+	EDMA.CH2.ADDRL =  (uint16_t)(&dmy)       & 0xff;
+	EDMA.CH2.ADDRH = ((uint16_t)(&dmy) >> 8) & 0xff;
+
+	EDMA.CH2.DESTADDRL =  (uint16_t)(&USARTD0.DATA)       & 0xff;
+	EDMA.CH2.DESTADDRH = ((uint16_t)(&USARTD0.DATA) >> 8) & 0xff;
+
+	EDMA.CH2.TRFCNTL =  cnt       & 0xff;
+	EDMA.CH2.TRFCNTH = (cnt >> 8) & 0xff;
+
+	EDMA.CH0.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
+	EDMA.CH2.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
+
+	while ( !(EDMA.INTFLAGS & EDMA_CH0TRNFIF_bm) ) {}
+
+	EDMA.INTFLAGS |= EDMA_CH0TRNFIF_bm | EDMA_CH2TRNFIF_bm;
 }
 
 
@@ -221,7 +255,6 @@ int rcvr_datablock (
 )
 {
 	BYTE token;
-
 
 	Timer1 = 20;
 	do {							/* Wait for data packet in timeout of 200ms */
@@ -306,6 +339,7 @@ DSTATUS disk_initialize (
 	power_off();						/* Turn off the socket power to reset the card */
 	if (Stat & STA_NODISK) return Stat;	/* No card in the socket */
 	power_on();							/* Turn on the socket power */
+	FCLK_SLOW();
 
 	for (n = 10; n; n--) xchg_spi(0xFF);	/* 80 dummy clocks */
 
@@ -337,6 +371,8 @@ DSTATUS disk_initialize (
 
 	if (ty) {			/* Initialization succeded */
 		Stat &= ~STA_NOINIT;		/* Clear STA_NOINIT */
+
+		FCLK_HIGH();
 	} else {			/* Initialization failed */
 		power_off();
 	}
