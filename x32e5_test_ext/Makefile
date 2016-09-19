@@ -2,7 +2,7 @@
 PROJECT = test
 
 ### Source files and search directory
-CSRC    = main.c ff.c mmc_avr.c sdaudio.c
+CSRC    = main.c ff.c mmc_avr_dma.c sdaudio.c
 ASRC    = asmfunc.S
 VPATH   =
 

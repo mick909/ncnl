@@ -7,7 +7,11 @@
 
 #define PLL_SCALE (1)
 
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+
 #define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
+#define	LD_WORD(ptr)		(WORD)(*(WORD*)(BYTE*)(ptr))
+#define	LD_DWORD(ptr)		(DWORD)(*(DWORD*)(BYTE*)(ptr))
 
 #define BUFFER_SIZE (2048)
 
