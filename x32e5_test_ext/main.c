@@ -95,33 +95,6 @@ void setup_XOSC(void)
 #endif
 }
 
-ISR(TCC4_OVF_vect)
-{
-	TCC4.INTFLAGS = TC4_OVFIF_bm;
-
-	uint8_t n;
-
-	n = Timer1;				/* 100Hz decrement timer */
-	if (n) Timer1 = --n;
-	n = Timer2;
-	if (n) Timer2 = --n;
-
-	uint16_t cnt = TCC5.CNT;
-	count = cnt;
-
-	digits[0] = digit[cnt % 10];
-	cnt /= 10;
-	digits[1] = digit[cnt % 10];
-	cnt /= 10;
-	digits[2] = digit[cnt % 10] & 0x7f;
-	cnt /= 10;
-	if (cnt == 0) {
-		digits[3] = 0xff;
-	} else {
-		digits[3] = digit[cnt % 10];
-	}
-}
-
 void setupTCC4_10ms(void)
 {
 	count = 0;

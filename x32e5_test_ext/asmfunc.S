@@ -3,6 +3,38 @@
 .list
 
 ;---------------------------------------------------------------------------;
+; delay_ms
+;
+; void delay_ms (uint16_t ms);
+
+.global delay_ms
+.func delay_ms
+delay_ms:
+	sbiw	r24, 1
+	brcs	9f
+	ldi		ZL, lo8(F_CPU / 4000)
+	ldi		ZH, hi8(F_CPU / 4000)
+1:
+	sbiw	ZL, 1
+	brne	1b
+	rjmp	delay_ms
+9:	ret
+.endfunc
+
+.global delay_us
+.func delay_us
+delay_us:
+	ldi		r23, 1		; 1
+1:	dec		r23			; 1
+	nop					; 1
+	brne	1b			; 1
+	sbiw	r24, 1		; 2
+	brne	delay_us	; 2
+	ret
+.endfunc
+
+
+;---------------------------------------------------------------------------;
 ; void main_clocksource_select(uint8_t clkCtrl);
 
 .global main_clocksource_select
@@ -26,6 +58,147 @@ clock_prescaler_select:
 	ret
 .endfunc
 
+
+;---------------------------------------------------------------------------;
+; ISR(TCC4_OVF_vect)
+;   10ms interval (counter is updated at TCC5)
+
+.global TCC4_OVF_vect
+.func TCC4_OVF_vect
+TCC4_OVF_vect:
+	push	r24
+	in		r24, _SFR_IO_ADDR(SREG)
+	push	r24
+	push	r25
+
+	push	r22
+	push	XL
+	push	XH
+
+	ldi		r24, TC4_OVFIF_bm
+	sts		TCC4_INTFLAGS, r24
+
+	lds		r24, Timer1
+	subi	r24, 1
+	brcs	1f
+	sts		Timer1, r24
+1:
+	lds		r24, Timer2
+	subi	r24, 1
+	brcs	2f
+	sts		Timer2, r24
+2:
+
+	lds		r24, TCC5_CNT
+	lds		r25, TCC5_CNT+1
+	sts		count+1, r25
+	sts		count, r24
+
+	; DIG1
+	clr		XL
+	ldi		r22, 16
+2:
+	lsl		r24
+	rol		r25
+	rol		XL
+	cpi		XL, 10
+	brcs	3f
+	subi	XL, 10
+	inc		r24
+3:
+	dec		r22
+	brne	2b
+
+	clr		XH
+	subi	XL, lo8(-(digit))
+	sbci	XH, hi8(-(digit))
+	ld		r22, X
+	sts		digits, r22
+
+	; DIG2
+	clr		XL
+	ldi		r22, 16
+2:
+	lsl		r24
+	rol		r25
+	rol		XL
+	cpi		XL, 10
+	brcs	3f
+	subi	XL, 10
+	inc		r24
+3:
+	dec		r22
+	brne	2b
+
+	clr		XH
+	subi	XL, lo8(-(digit))
+	sbci	XH, hi8(-(digit))
+	ld		r22, X
+	sts		digits+1, r22
+
+	; DIG3
+	clr		XL
+	ldi		r22, 16
+2:
+	lsl		r24
+	rol		r25
+	rol		XL
+	cpi		XL, 10
+	brcs	3f
+	subi	XL, 10
+	inc		r24
+3:
+	dec		r22
+	brne	2b
+
+	clr		XH
+	subi	XL, lo8(-(digit))
+	sbci	XH, hi8(-(digit))
+	ld		r22, X
+	andi	r22, 0x7f
+	sts		digits+2, r22
+
+	; DIG4
+	clr		XL
+	cp		r24, XL
+	cpc		r25, XL
+	brne	1f
+	ldi		r22, 0xff
+	sts		digits+3, r22
+	rjmp	9f
+
+1:
+	ldi		r22, 16
+2:
+	lsl		r24
+	rol		r25
+	rol		XL
+	cpi		XL, 10
+	brcs	3f
+	subi	XL, 10
+	inc		r24
+3:
+	dec		r22
+	brne	2b
+
+	clr		XH
+	subi	XL, lo8(-(digit))
+	sbci	XH, hi8(-(digit))
+	ld		r22, X
+	sts		digits+3, r22
+
+9:
+	pop		XH
+	pop		XL
+	pop		r22
+
+	pop		r25
+	pop		r24
+	out		_SFR_IO_ADDR(SREG), r24
+	pop		r24
+
+	reti
+.endfunc
 
 ;---------------------------------------------------------------------------;
 ; ISR(TCD5_OVF_vect)

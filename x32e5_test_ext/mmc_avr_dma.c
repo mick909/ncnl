@@ -102,7 +102,6 @@ void power_on (void)
 static
 void power_off (void)
 {
-	USARTD0.BAUDCTRLA = 0;
 	USARTD0.CTRLB     = 0;
 
 	PORTD.OUTSET = PIN4_bm;
