@@ -2,6 +2,24 @@
 #include <avr/io.h>
 .list
 
+.macro STORE addr, reg
+	.if	\addr > 0x3F
+		sts	\addr, \reg
+	.else
+		out	_SFR_IO_ADDR(\addr), \reg
+	.endif
+.endm
+
+.macro LOAD reg, addr
+	.if	\addr > 0x3F
+		lds	\reg, \addr
+	.else
+		in	\reg, _SFR_IO_ADDR(\addr)
+	.endif
+.endm
+
+.equ USE_SHIFTREG, 1
+
 ;---------------------------------------------------------------------------;
 ; delay_ms
 ;
@@ -41,7 +59,7 @@ delay_us:
 .func main_clocksource_select
 main_clocksource_select:
 	ldi		r25, 0xD8
-	out		_SFR_IO_ADDR(CPU_CCP), r25
+	STORE	CPU_CCP, r25
 	sts		CLK_CTRL, r24
 	ret
 .endfunc
@@ -53,7 +71,7 @@ main_clocksource_select:
 .func clock_prescaler_select
 clock_prescaler_select:
 	ldi		r25, 0xD8
-	out		_SFR_IO_ADDR(CPU_CCP), r25
+	STORE	CPU_CCP, r25
 	sts		CLK_PSCTRL, r24
 	ret
 .endfunc
@@ -67,7 +85,7 @@ clock_prescaler_select:
 .func TCC4_OVF_vect
 TCC4_OVF_vect:
 	push	r24
-	in		r24, _SFR_IO_ADDR(SREG)
+	LOAD	r24, SREG
 	push	r24
 	push	r25
 
@@ -76,7 +94,7 @@ TCC4_OVF_vect:
 	push	XH
 
 	ldi		r24, TC4_OVFIF_bm
-	sts		TCC4_INTFLAGS, r24
+	STORE	TCC4_INTFLAGS, r24
 
 	lds		r24, Timer1
 	subi	r24, 1
@@ -89,8 +107,8 @@ TCC4_OVF_vect:
 	sts		Timer2, r24
 2:
 
-	lds		r24, TCC5_CNT
-	lds		r25, TCC5_CNT+1
+	LOAD	r24, TCC5_CNT
+	LOAD	r25, TCC5_CNT+1
 	sts		count+1, r25
 	sts		count, r24
 
@@ -194,7 +212,7 @@ TCC4_OVF_vect:
 
 	pop		r25
 	pop		r24
-	out		_SFR_IO_ADDR(SREG), r24
+	STORE	SREG, r24
 	pop		r24
 
 	reti
@@ -208,7 +226,7 @@ TCC4_OVF_vect:
 .func TCD5_OVF_vect
 TCD5_OVF_vect:
 	push	r24
-	in		r24, _SFR_IO_ADDR(SREG)
+	LOAD	r24, SREG
 	push	r24
 
 	push	r23
@@ -219,7 +237,7 @@ TCD5_OVF_vect:
 	push	ZH
 
 	ldi		r24, TC5_OVFIF_bm;
-	sts		TCD5_INTFLAGS, r24
+	STORE	TCD5_INTFLAGS, r24
 
 	lds		r24, fifo_ct
 	lds		r25, fifo_ct+1
@@ -256,8 +274,8 @@ TCD5_OVF_vect:
 
 	ld		r25, Z
 	ldi		r24, 0
-	sts		DACA_CH0DATA+1, r25
-	sts		DACA_CH0DATA,   r24
+	STORE	DACA_CH0DATA+1, r25
+	STORE	DACA_CH0DATA,   r24
 	rjmp	9f
 
 mono_b16:
@@ -277,8 +295,8 @@ mono_b16:
 	andi	r24, 0xf0
 	ld		r25, Z
 	subi	r25, 0x80
-	sts		DACA_CH0DATA+1, r25
-	sts		DACA_CH0DATA,   r24
+	STORE	DACA_CH0DATA+1, r25
+	STORE	DACA_CH0DATA,   r24
 	rjmp	9f
 
 stereo:
@@ -310,8 +328,8 @@ stereo:
 	add		r24, r26
 	adc		r25, r27
 
-	sts		DACA_CH0DATA+1, r25
-	sts		DACA_CH0DATA,   r24
+	STORE	DACA_CH0DATA+1, r25
+	STORE	DACA_CH0DATA,   r24
 	rjmp	9f
 
 3:
@@ -341,8 +359,8 @@ stereo:
 	adc		r25, r27
 	andi	r24, 0xf0
 
-	sts		DACA_CH0DATA+1, r25
-	sts		DACA_CH0DATA,   r24
+	STORE	DACA_CH0DATA+1, r25
+	STORE	DACA_CH0DATA,   r24
 
 9:
 	pop		ZH
@@ -353,7 +371,7 @@ stereo:
 	pop		r23
 
 	pop		r24
-	out		_SFR_IO_ADDR(SREG), r24
+	STORE	SREG, r24
 	pop		r24
 	reti
 .endfunc
@@ -366,25 +384,25 @@ stereo:
 .func TCC5_OVF_vect
 TCC5_OVF_vect:
 	push	r24
-	in		r24, _SFR_IO_ADDR(SREG)
+	LOAD	r24, SREG
 	push	r24
 	push	r25
 
 	ldi		r24, TC5_OVFIF_bm
-	sts		TCC5_INTFLAGS, r24
+	STORE		TCC5_INTFLAGS, r24
 
-	lds		r24, TCC5_CNT
-	lds		r25, TCC5_CNT+1
+	LOAD	r24, TCC5_CNT
+	LOAD	r25, TCC5_CNT+1
 
 	subi	r24, lo8(-(10000))
 	sbci	r25, hi8(-(10000))
 
-	sts		TCC5_CNT+1, r25
-	sts		TCC5_CNT, r24
+	STORE	TCC5_CNT+1, r25
+	STORE	TCC5_CNT, r24
 
 	pop		r25
 	pop		r24
-	out		_SFR_IO_ADDR(SREG), r24
+	STORE	SREG, r24
 	pop		r24
 	reti
 .endfunc
@@ -398,21 +416,49 @@ TCC5_OVF_vect:
 .func TCC4_CCA_vect
 TCC4_CCA_vect:
 	push	r24
-	in		r24, _SFR_IO_ADDR(SREG)
+	LOAD	r24, SREG
 	push	r24
 
-	ldi		r24, TC4_CCDIF_bm | TC4_CCCIF_bm | TC4_CCBIF_bm | TC4_CCAIF_bm;
-	sts		TCC4_INTFLAGS, r24
+.if USE_SHIFTREG == 1
+	ldi		r24, USART_TXEN_bm | USART_RXEN_bm
+	STORE	USARTC0_CTRLB, r24
+1:
+	LOAD	r24, USARTC0_STATUS
+	sbrs	r24, USART_DREIF_bp
+	rjmp	1b
+	lds		r24, digits
+	sts		USARTC0_DATA, r24
+1:
+	LOAD	r24, USARTC0_STATUS
+	sbrs	r24, USART_RXCIF_bp
+	rjmp	1b
+
+	clr		r24
+	STORE	USARTC0_CTRLB, r24
+
+	ldi		r24, PIN5_bm | PIN6_bm | PIN7_bm
+	STORE	PORTC_DIRSET, r24
+
+	ldi		r24, PIN7_bm
+	STORE	PORTC_OUTSET, r24
+
+	ldi		r24, PIN6_bm
+	STORE	PORTC_OUTSET, r24
+	STORE	PORTC_OUTCLR, r24
+.else
+	ldi		r24, TC4_CCDIF_bm | TC4_CCCIF_bm | TC4_CCBIF_bm | TC4_CCAIF_bm
+	STORE	TCC4_INTFLAGS, r24
 
 	ldi		r24, PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm
-	sts		PORTA_OUTCLR, r24
+	STORE	PORTA_OUTCLR, r24
 	lds		r24, digits
-	sts		PORTC_OUT, r24
+	STORE	PORTC_OUT, r24
 	ldi		r24, PIN4_bm
-	sts		PORTA_OUTSET, r24
+	STORE	PORTA_OUTSET, r24
+.endif
 
 	pop		r24
-	out		_SFR_IO_ADDR(SREG), r24
+	STORE	SREG, r24
 	pop		r24
 	reti
 .endfunc
@@ -421,21 +467,50 @@ TCC4_CCA_vect:
 .func TCC4_CCB_vect
 TCC4_CCB_vect:
 	push	r24
-	in		r24, _SFR_IO_ADDR(SREG)
+	LOAD	r24, SREG
 	push	r24
 
+.if USE_SHIFTREG == 1
+	ldi		r24, USART_TXEN_bm | USART_RXEN_bm
+	STORE	USARTC0_CTRLB, r24
+1:
+	LOAD	r24, USARTC0_STATUS
+	sbrs	r24, USART_DREIF_bp
+	rjmp	1b
+	lds		r24, digits+1
+	STORE	USARTC0_DATA, r24
+1:
+	LOAD	r24, USARTC0_STATUS
+	sbrs	r24, USART_RXCIF_bp
+	rjmp	1b
+
+	clr		r24
+	STORE	USARTC0_CTRLB, r24
+
+	ldi		r24, PIN5_bm | PIN6_bm | PIN7_bm
+	STORE	PORTC_DIRSET, r24
+
+	ldi		r24, PIN7_bm
+	STORE	PORTC_OUTCLR, r24
+
+	ldi		r24, PIN6_bm
+	STORE	PORTC_OUTSET, r24
+	STORE	PORTC_OUTCLR, r24
+
+.else
 	ldi		r24, TC4_CCDIF_bm | TC4_CCCIF_bm | TC4_CCBIF_bm | TC4_CCAIF_bm;
-	sts		TCC4_INTFLAGS, r24
+	STORE	TCC4_INTFLAGS, r24
 
 	ldi		r24, PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm
-	sts		PORTA_OUTCLR, r24
+	STORE	PORTA_OUTCLR, r24
 	lds		r24, digits+1
-	sts		PORTC_OUT, r24
+	STORE	PORTC_OUT, r24
 	ldi		r24, PIN5_bm
-	sts		PORTA_OUTSET, r24
+	STORE	PORTA_OUTSET, r24
+.endif
 
 	pop		r24
-	out		_SFR_IO_ADDR(SREG), r24
+	STORE	SREG, r24
 	pop		r24
 	reti
 .endfunc
@@ -444,21 +519,50 @@ TCC4_CCB_vect:
 .func TCC4_CCC_vect
 TCC4_CCC_vect:
 	push	r24
-	in		r24, _SFR_IO_ADDR(SREG)
+	LOAD	r24, SREG
 	push	r24
 
+.if USE_SHIFTREG == 1
+	ldi		r24, USART_TXEN_bm | USART_RXEN_bm
+	STORE	USARTC0_CTRLB, r24
+1:
+	LOAD	r24, USARTC0_STATUS
+	sbrs	r24, USART_DREIF_bp
+	rjmp	1b
+	lds		r24, digits+2
+	STORE	USARTC0_DATA, r24
+1:
+	LOAD	r24, USARTC0_STATUS
+	sbrs	r24, USART_RXCIF_bp
+	rjmp	1b
+
+	clr		r24
+	STORE	USARTC0_CTRLB, r24
+
+	ldi		r24, PIN5_bm | PIN6_bm | PIN7_bm
+	STORE	PORTC_DIRSET, r24
+
+	ldi		r24, PIN7_bm
+	STORE	PORTC_OUTCLR, r24
+
+	ldi		r24, PIN6_bm
+	STORE	PORTC_OUTSET, r24
+	STORE	PORTC_OUTCLR, r24
+
+.else
 	ldi		r24, TC4_CCDIF_bm | TC4_CCCIF_bm | TC4_CCBIF_bm | TC4_CCAIF_bm;
-	sts		TCC4_INTFLAGS, r24
+	STORE	TCC4_INTFLAGS, r24
 
 	ldi		r24, PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm
-	sts		PORTA_OUTCLR, r24
+	STORE	PORTA_OUTCLR, r24
 	lds		r24, digits+2
-	sts		PORTC_OUT, r24
+	STORE	PORTC_OUT, r24
 	ldi		r24, PIN6_bm
-	sts		PORTA_OUTSET, r24
+	STORE	PORTA_OUTSET, r24
+.endif
 
 	pop		r24
-	out		_SFR_IO_ADDR(SREG), r24
+	STORE	SREG, r24
 	pop		r24
 	reti
 .endfunc
@@ -467,21 +571,50 @@ TCC4_CCC_vect:
 .func TCC4_CCD_vect
 TCC4_CCD_vect:
 	push	r24
-	in		r24, _SFR_IO_ADDR(SREG)
+	LOAD	r24, SREG
 	push	r24
 
+.if USE_SHIFTREG == 1
+	ldi		r24, USART_TXEN_bm | USART_RXEN_bm
+	STORE	USARTC0_CTRLB, r24
+1:
+	LOAD	r24, USARTC0_STATUS
+	sbrs	r24, USART_DREIF_bp
+	rjmp	1b
+	lds		r24, digits+3
+	STORE	USARTC0_DATA, r24
+1:
+	LOAD	r24, USARTC0_STATUS
+	sbrs	r24, USART_RXCIF_bp
+	rjmp	1b
+
+	clr		r24
+	STORE	USARTC0_CTRLB, r24
+
+	ldi		r24, PIN5_bm | PIN6_bm | PIN7_bm
+	STORE	PORTC_DIRSET, r24
+
+	ldi		r24, PIN7_bm
+	STORE	PORTC_OUTCLR, r24
+
+	ldi		r24, PIN6_bm
+	STORE	PORTC_OUTSET, r24
+	STORE	PORTC_OUTCLR, r24
+
+.else
 	ldi		r24, TC4_CCDIF_bm | TC4_CCCIF_bm | TC4_CCBIF_bm | TC4_CCAIF_bm;
-	sts		TCC4_INTFLAGS, r24
+	STORE	TCC4_INTFLAGS, r24
 
 	ldi		r24, PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm
-	sts		PORTA_OUTCLR, r24
+	STORE	PORTA_OUTCLR, r24
 	lds		r24, digits+3
-	sts		PORTC_OUT, r24
+	STORE	PORTC_OUT, r24
 	ldi		r24, PIN7_bm
-	sts		PORTA_OUTSET, r24
+	STORE	PORTA_OUTSET, r24
+.endif
 
 	pop		r24
-	out		_SFR_IO_ADDR(SREG), r24
+	STORE	SREG, r24
 	pop		r24
 	reti
 .endfunc

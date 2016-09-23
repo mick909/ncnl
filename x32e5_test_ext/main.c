@@ -49,6 +49,8 @@ TCC5
 #define PLL_SCALE (1)
 #endif
 
+#define USE_SHIFTREG 1
+
 extern
 uint8_t Timer1, Timer2;	/* 100Hz decrement timer */
 
@@ -127,6 +129,36 @@ void setupTCC4_10ms(void)
 	TCC4.CTRLA = TC45_CLKSEL_DIV256_gc;
 }
 
+#if USE_SHIFTREG == 1
+void init_usart_spi_led(void)
+{
+	PORTC.DIRSET = PIN5_bm | PIN6_bm | PIN7_bm;
+	PORTC.REMAP = PORT_USART0_bm;
+	USARTC0.CTRLC = USART_CMODE_MSPI_gc;	/* SPI Mode 0, MSB first */
+	USARTC0.CTRLB = USART_TXEN_bm | USART_RXEN_bm;
+	USARTC0.BAUDCTRLA = 0;
+
+	/* Enable TXD0 for USART-SPI Master, Send to Segment Register */
+	while ( !(USARTC0.STATUS & USART_DREIF_bm));
+	USARTC0.DATA = 0xff;
+	while ( !(USARTC0.STATUS & USART_RXCIF_bm));
+
+	USARTC0.CTRLB = 0;
+	PORTC.DIRSET = PIN5_bm | PIN6_bm | PIN7_bm;
+
+	PORTC.OUTCLR = PIN7_bm;	/* MOSI = L to 74AC164 */
+
+	PORTC.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTC.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTC.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTC.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTC.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTC.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTC.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTC.OUTTGL = PIN6_bm;	/* MISO = L, ratch & enable 74HC595 */
+}
+#endif
+
 FRESULT scan_files(char* path)
 {
 	FRESULT res;
@@ -173,10 +205,14 @@ int main(void)
 	setup_XOSC();
 	OSC.CTRL &= ~OSC_RC2MEN_bm;
 
+#if USE_SHIFTREG == 1
+	init_usart_spi_led();
+#else
 	PORTC.DIR = 0xff;
 	PORTC.OUT = 0xff;
 	PORTA.DIRSET = PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm;
 	PORTA.OUTCLR = PIN7_bm | PIN6_bm | PIN5_bm | PIN4_bm;
+#endif
 
 	PORTA.DIRSET = PIN2_bm;
 	PORTA.OUTCLR = PIN2_bm;
