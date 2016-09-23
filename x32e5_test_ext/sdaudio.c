@@ -108,9 +108,6 @@ uint8_t playfile(FIL* fp)
 	UINT rb;
 	UINT wi;
 
-	PORTD.DIRSET = PIN3_bm;
-	PORTD.OUTCLR = PIN3_bm;
-
 	size = loadheader(fp);
 
 	wi = 0;
@@ -144,9 +141,7 @@ uint8_t playfile(FIL* fp)
 
 		if (size && fifo_ct <= (BUFFER_SIZE/2)) {
 			rsize = (size >= (BUFFER_SIZE/2)) ? (BUFFER_SIZE/2) : size;
-			PORTD.OUTSET = PIN3_bm;
 			f_read(fp, &buffer[wi], rsize, &rb);
-			PORTD.OUTCLR = PIN3_bm;
 			if (rb != rsize) break;
 			size -= rb;
 			wi = (wi + rb) & (BUFFER_SIZE-1);
