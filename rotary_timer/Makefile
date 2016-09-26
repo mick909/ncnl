@@ -1,5 +1,5 @@
 ### Project name (also used for output file name)
-PROJECT = shottimer
+PROJECT = rottimer
 
 ### Source files and search directory
 CSRC    = main.c
