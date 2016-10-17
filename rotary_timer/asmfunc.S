@@ -304,6 +304,9 @@ PCINT1_vect:
 	push	r24
 	push	r25
 
+	ldi		r24, _BV(PCINT11) | _BV(PCINT13)
+	STORE	PCMSK1, r24
+
 	push	ZL
 	push	ZH
 	rcall	update_qdec
