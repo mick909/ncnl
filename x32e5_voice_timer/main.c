@@ -175,7 +175,7 @@ void timer_proc(void)
 
 	if (TCC5.INTFLAGS & TC5_OVFIF_bm) {
 		TCC5.INTFLAGS = TC5_OVFIF_bm;
-		TCC5.CNT -= 50000;
+		TCC5.CNT += 10000;
 	}
 
 	if (intf) update_led(intf);
