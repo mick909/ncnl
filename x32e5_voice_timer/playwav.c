@@ -48,7 +48,13 @@ void play_wav(void)
 {
 	FATFS fs;
 
+	/* Setup DMA for USART SPI */
+	EDMA.CTRL = EDMA_ENABLE_bm | EDMA_CHMODE_PER0123_gc
+			   | EDMA_DBUFMODE_DISABLE_gc | EDMA_PRIMODE_CH0123_gc;
+
 	f_mount(&fs, "", 0);
 	scan_files();
+
+	EDMA.CTRL = 0;
 }
 

@@ -93,19 +93,24 @@ void power_on (void)
 	USARTC0.CTRLB = USART_TXEN_bm | USART_RXEN_bm;
 	USARTC0.BAUDCTRLA = 63;
 
-	/* Setup DMA for USART SPI */
-	EDMA.CTRL = EDMA_ENABLE_bm | EDMA_CHMODE_STD02_gc
-			   | EDMA_DBUFMODE_DISABLE_gc | EDMA_PRIMODE_CH0123_gc;
+	/* DMA Chennel2 -> Transfer from USARTC0.Data to buffer */
+	EDMA.CH2.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
+	EDMA.CH2.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_RXC_gc;
+
+	/* DMA Chennel3 -> Transfer dummy 0xff to USARTC0.Data */
+	EDMA.CH3.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
+	EDMA.CH3.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_DRE_gc;
 }
 
 static
 void power_off (void)
 {
+	EDMA.CH2.CTRLA = 0;
+	EDMA.CH3.CTRLA = 0;
+
 	USARTC0.CTRLB     = 0;
 
 	PORTC.OUTSET = PIN0_bm;
-
-	EDMA.CTRL = 0;
 
 	Stat |= STA_NOINIT;
 }
@@ -131,54 +136,49 @@ BYTE xchg_spi (		/* Returns received data */
 
 /* Receive a data block fast */
 static
+void rcvr_spi_multi_512 (
+	BYTE *p,	/* Data read buffer */
+	uint8_t cnt	/* Size of data block */
+)
+{
+	volatile uint8_t dmy = 0xff;
+
+	/* DMA Chennel2 -> Transfer from USARTC0.Data to buffer */
+	EDMA.CH2.ADDR     = (uint16_t)(p);
+	EDMA.CH2.TRFCNTL  = cnt;
+
+	/* DMA Chennel3 -> Transfer dummy 0xff to USARTC0.Data */
+	EDMA.CH3.ADDR     = (uint16_t)(&dmy);
+	EDMA.CH3.TRFCNTL  = cnt;
+
+	/* To make stable transmission, Rx must be enaled first ! */
+	EDMA.CH2.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
+	EDMA.CH3.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
+
+	set_sleep_mode(SLEEP_MODE_IDLE);
+	while ( !(EDMA.INTFLAGS & EDMA_CH2TRNFIF_bm) ) {
+		sleep_mode();
+		timer_proc();
+	}
+
+	EDMA.INTFLAGS |= EDMA_CH2TRNFIF_bm | EDMA_CH3TRNFIF_bm;
+}
+
+static
 void rcvr_spi_multi (
 	BYTE *p,	/* Data read buffer */
 	UINT cnt	/* Size of data block */
 )
 {
-	volatile uint8_t dmy = 0xff;
-
-	/* DMA Chennel0 -> Transfer from USARTC0.Data to buffer */
-	EDMA.CH0.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
-	EDMA.CH0.DESTADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
-	EDMA.CH0.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_RXC_gc;
-
-	EDMA.CH0.ADDRL =  (uint16_t)(&USARTC0.DATA)       & 0xff;
-	EDMA.CH0.ADDRH = ((uint16_t)(&USARTC0.DATA) >> 8) & 0xff;
-
-	EDMA.CH0.DESTADDRL =  (uint16_t)p       & 0xff;
-	EDMA.CH0.DESTADDRH = ((uint16_t)p >> 8) & 0xff;
-
-	EDMA.CH0.TRFCNTL =  cnt       & 0xff;
-	EDMA.CH0.TRFCNTH = (cnt >> 8) & 0xff;
-
-	/* DMA Chennel2 -> Transfer dummy 0xff to USARTC0.Data */
-	EDMA.CH2.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
-	EDMA.CH2.DESTADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
-	EDMA.CH2.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_DRE_gc;
-
-	EDMA.CH2.ADDRL =  (uint16_t)(&dmy)       & 0xff;
-	EDMA.CH2.ADDRH = ((uint16_t)(&dmy) >> 8) & 0xff;
-
-	EDMA.CH2.DESTADDRL =  (uint16_t)(&USARTC0.DATA)       & 0xff;
-	EDMA.CH2.DESTADDRH = ((uint16_t)(&USARTC0.DATA) >> 8) & 0xff;
-
-	EDMA.CH2.TRFCNTL =  cnt       & 0xff;
-	EDMA.CH2.TRFCNTH = (cnt >> 8) & 0xff;
-
-	/* To make stable transmission, Rx must be enaled first ! */
-	EDMA.CH0.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
-	EDMA.CH2.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
-
-	set_sleep_mode(SLEEP_MODE_IDLE);
-	while ( !(EDMA.INTFLAGS & EDMA_CH0TRNFIF_bm) ) {
-		sleep_mode();
-		timer_proc();
+	while (cnt > 512) {
+		rcvr_spi_multi_512(p, 0);
+		cnt -= 512;
+		p += 512;
 	}
-
-	EDMA.INTFLAGS |= EDMA_CH0TRNFIF_bm | EDMA_CH2TRNFIF_bm;
+	if (cnt) {
+		rcvr_spi_multi_512(p, (cnt>>1));
+	}
 }
-
 
 /*-----------------------------------------------------------------------*/
 /* Wait for card ready                                                   */

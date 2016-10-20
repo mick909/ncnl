@@ -11,12 +11,9 @@
 #define	LD_WORD(ptr)		(WORD)(*(WORD*)(BYTE*)(ptr))
 #define	LD_DWORD(ptr)		(DWORD)(*(DWORD*)(BYTE*)(ptr))
 
-#define BUFFER_SIZE (2048)
-
-BYTE buffer[BUFFER_SIZE];
-
-volatile UINT fifo_ct;
-volatile UINT fifo_ri;
+BYTE buffer[2][1024];
+volatile uint16_t buffer_ct[2];
+volatile uint8_t play_buffer;
 
 volatile uint16_t freq;
 volatile uint8_t channel;
@@ -60,29 +57,29 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 	BYTE b;
 	UINT rb;
 
-	if (f_read(fp, buffer, 12, &rb) != FR_OK) return 1;	/* Load file header (12 bytes) */
+	if (f_read(fp, buffer[0], 12, &rb) != FR_OK) return 1;	/* Load file header (12 bytes) */
 
-	if (rb != 12 || LD_DWORD(buffer+8) != FCC('W','A','V','E')) return 0;
+	if (rb != 12 || LD_DWORD(&buffer[0][8]) != FCC('W','A','V','E')) return 0;
 
 	for (;;) {
-		f_read(fp, buffer, 8, &rb);				/* Get Chunk ID and size */
+		f_read(fp, buffer[0], 8, &rb);				/* Get Chunk ID and size */
 		if (rb != 8) return 0;
-		sz = LD_DWORD(&buffer[4]);					/* Chunk size */
+		sz = LD_DWORD(&buffer[0][4]);					/* Chunk size */
 
-		switch (LD_DWORD(&buffer[0])) {			/* Switch by chunk ID */
+		switch (LD_DWORD(&buffer[0][0])) {			/* Switch by chunk ID */
 		case FCC('f','m','t',' ') :					/* 'fmt ' chunk */
 			if (sz & 1) sz++;						/* Align chunk size */
 			if (sz > 100 || sz < 16) return 0;		/* Check chunk size */
-			f_read(fp, buffer, sz, &rb);			/* Get content */
+			f_read(fp, buffer[0], sz, &rb);			/* Get content */
 			if (rb != sz) return 0;
-			if (buffer[0] != 1) return 0;			/* Check coding type (LPCM) */
-			b = buffer[2];
+			if (buffer[0][0] != 1) return 0;			/* Check coding type (LPCM) */
+			b = buffer[0][2];
 			if (b != 1 && b != 2) return 0;			/* Mono Only */
 			channel = b;
-			b = buffer[14];
+			b = buffer[0][14];
 			if (b != 8 && b != 16) return 0;		/* resolution 8bit only */
 			resolution = b;
-			f = LD_DWORD(&buffer[4]);				/* Check sampling freqency (8k-48k) */
+			f = LD_DWORD(&buffer[0][4]);				/* Check sampling freqency (8k-48k) */
 			freq = F_CPU / f;
 			break;
 
@@ -105,54 +102,95 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 	return 0;
 }
 
+uint16_t make_dac_data(uint8_t* buff, uint16_t size)
+{
+	uint8_t unit = 1;
+	uint16_t ct = 0;
+
+	if (resolution == 16) unit = 2;
+	if (channel == 2) unit *= 2;
+
+	while (size > unit) {
+		if (channel == 1) {
+			if (resolution == 8) {
+				uint16_t d = buff[size-1];
+				d <<= 4;
+				buff[size*2-2] = d;
+				--size;
+			}
+			else {
+				uint16_t d = *(uint16_t*)buff + 0x8000;
+				d >>= 4;
+				*(uint16_t*)buff = d;
+				buff += 2;
+				size -= 2;
+			}
+		}
+		else {
+			if (resolution == 8) {
+				uint16_t d = *buff;
+				d += *(buff+1);
+				d <<= 3;
+				*(uint16_t*)buff = d;
+				buff += 2;
+				size -= 2;
+			}
+			else {
+				uint16_t d = (*(uint16_t*)buff + 0x8000) >> 1;
+				d += (*(uint16_t*)(buff+2) + 0x8000) >> 1;
+				*(uint16_t*)(buff+ct) = d >> 3;
+				buff += unit;
+				size -= unit;
+			}
+		}
+		ct += 2;
+	}
+
+	return ct;
+}
+
 void playfile(FIL* fp)
 {
 	DWORD size;
 	UINT rsize;
 	UINT rb;
-	UINT wi;
 
 	size = loadheader(fp);
 
-	wi = 0;
-
 	UINT pad = 512 - (fp->fptr % 512);
-	if (pad) {
-		fifo_ri = BUFFER_SIZE - pad;
-
-		f_read(fp, &buffer[fifo_ri], pad, &rb);
-		if (pad != rb) return;
-		fifo_ct = rb;
-		size -= rb;
-	} else {
-		fifo_ct = 0;
-		fifo_ri = 0;
-	}
-
-	rsize = BUFFER_SIZE / 2;
-	f_read(fp, &buffer[0], rsize, &rb);
-	if (rb != rsize) return;
-
+	if (pad == 0) pad = 512;
+	f_read(fp, &buffer[0][0], pad, &rb);
+	if (pad != rb) return;
+	buffer_ct[0] = make_dac_data(buffer[0], rb);
 	size -= rb;
-	wi += rb;
-	fifo_ct += rb;
+
+	if (resolution == 8 && channel == 1) rsize = 512;
+	else rsize = 1024;
+
+	f_read(fp, &buffer[1][0], rsize, &rb);
+	if (rb != rsize) return;
+	buffer_ct[1] = make_dac_data(buffer[1], rb);
+	size -= rb;
+
+	play_buffer = 0;
 
 	startplayisr();
 
 	set_sleep_mode(SLEEP_MODE_IDLE);
-	while (size || fifo_ct >= 4) {
+	while (size || buffer_ct[play_buffer] >= 4) {
 		sleep_mode();
 		timer_proc();
 
-		if (size && fifo_ct <= (BUFFER_SIZE/2)) {
-			rsize = (size >= (BUFFER_SIZE/2)) ? (BUFFER_SIZE/2) : size;
-			f_read(fp, &buffer[wi], rsize, &rb);
-			if (rb != rsize) break;
-			size -= rb;
-			wi = (wi + rb) & (BUFFER_SIZE-1);
+		if (size && buffer_ct[play_buffer] == 0) {
 			cli();
-			fifo_ct += rb;
+			play_buffer = 1 - play_buffer;
 			sei();
+
+			rsize = (size >= rsize) ? rsize : size;
+			f_read(fp, &buffer[1-play_buffer][0], rsize, &rb);
+			if (rb != rsize) break;
+			buffer_ct[1-play_buffer] = make_dac_data(buffer[1-play_buffer], rb);
+			size -= rb;
 		}
 	}
 
