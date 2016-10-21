@@ -7,13 +7,21 @@
 
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
 
+void set_led_digit(uint16_t v);
+
 #define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
 #define	LD_WORD(ptr)		(WORD)(*(WORD*)(BYTE*)(ptr))
 #define	LD_DWORD(ptr)		(DWORD)(*(DWORD*)(BYTE*)(ptr))
 
+volatile uint16_t trace_num;
+
 BYTE buffer[2][1024];
 volatile uint16_t buffer_ct[2];
 volatile uint8_t play_buffer;
+volatile uint16_t* playp;
+volatile uint16_t playcnt;
+
+uint16_t (* volatile transfer)(BYTE* p, uint16_t size);
 
 volatile uint16_t freq;
 volatile uint8_t channel;
@@ -21,33 +29,94 @@ volatile uint8_t resolution;
 
 void timer_proc(void);
 
-void startplayisr(void)
+void startplay(void)
 {
 	DACA.CTRLB = DAC_CHSEL_SINGLE_gc;
 	DACA.CTRLC = DAC_REFSEL_AVCC_gc | DAC_LEFTADJ_bm;
 	DACA.CTRLA = DAC_CH0EN_bm | DAC_ENABLE_bm;
-	DACA.CH0DATA = 128;
 
 	PORTA.OUTCLR = PIN3_bm;
 
-	TCD5.CTRLB = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
-	TCD5.CNT = 0;
-	TCD5.PER = freq - 1;
+	TCD5.CTRLB    = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
+	TCD5.CNT      = 0;
+	TCD5.PER      = freq - 1;
 	TCD5.INTCTRLA = TC45_OVFINTLVL_HI_gc;
 	TCD5.INTFLAGS = TC5_OVFIF_bm;
-	TCD5.CTRLA = TC45_CLKSEL_DIV1_gc;
+	TCD5.CTRLA    = TC45_CLKSEL_DIV1_gc;
 }
 
-void stopplayisr(void)
+void stopplay(void)
 {
 	PORTA.OUTSET = PIN3_bm;
+
+	TCD5.INTCTRLA = 0;
+	TCD5.INTFLAGS = TC5_OVFIF_bm;
+	TCD5.CTRLA = TC45_CLKSEL_OFF_gc;
 
 	DACA.CTRLA = 0;
 	DACA.CTRLB = 0;
 	DACA.CTRLC = 0;
+}
 
-	TCD5.INTCTRLA = 0;
-	TCD5.CTRLA = TC45_CLKSEL_OFF_gc;
+uint16_t transfer_8bit_mono(BYTE* buff, uint16_t size)
+{
+	BYTE* dp = buff + size * 2;
+	buff += size;
+
+	while (buff != dp) {
+		*--dp = *--buff;
+		*--dp = 0;
+		timer_proc();
+	}
+
+	return size * 2;
+}
+
+uint16_t transfer_8bit_stereo(BYTE* buff, uint16_t size)
+{
+	uint16_t d;
+	uint16_t* dp = (uint16_t*)(buff);
+
+	for (uint16_t cnt=size; cnt > 0; cnt -= 2) {
+		d = *buff++;
+		d += *buff++;
+		d <<= 7;
+		*dp++ = d;
+		timer_proc();
+	}
+
+	return size;
+}
+
+uint16_t transfer_16bit_mono(BYTE* buff, uint16_t size)
+{
+	uint16_t d;
+	uint16_t* dp = (uint16_t*)(buff);
+
+	for (uint16_t cnt=size; cnt > 0; cnt -= 2) {
+		d = *dp;
+		d = (d + 0x8000) & 0xfff0;
+		*dp++ = d;
+		timer_proc();
+	}
+
+	return size;
+}
+
+uint16_t transfer_16bit_stereo(BYTE* buff, uint16_t size)
+{
+	uint16_t d;
+	uint16_t* sp = (uint16_t*)(buff);
+	uint16_t* dp = (uint16_t*)(buff);
+
+	for (uint16_t cnt=size; cnt >= 4; cnt -= 4) {
+		d = (*sp++ + 0x8000) >> 1;
+		d += (*sp++ + 0x8000) >> 1;
+		*dp++ = d & 0xfff0;
+		timer_proc();
+	}
+
+	return size / 2;
 }
 
 static
@@ -79,6 +148,21 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 			b = buffer[0][14];
 			if (b != 8 && b != 16) return 0;		/* resolution 8bit only */
 			resolution = b;
+
+			if (channel == 1) {
+				if (resolution == 8) {
+					transfer = transfer_8bit_mono;
+				} else {
+					transfer = transfer_16bit_mono;
+				}
+			} else {
+				if (resolution == 8) {
+					transfer = transfer_8bit_stereo;
+				} else {
+					transfer = transfer_16bit_stereo;
+				}
+			}
+
 			f = LD_DWORD(&buffer[0][4]);				/* Check sampling freqency (8k-48k) */
 			freq = F_CPU / f;
 			break;
@@ -102,51 +186,15 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 	return 0;
 }
 
-uint16_t make_dac_data(uint8_t* buff, uint16_t size)
-{
-	uint8_t unit = 1;
-	uint16_t ct = 0;
+ISR(TCD5_OVF_vect) {
+	TCD5.INTFLAGS = TC5_OVFIF_bm;
 
-	if (resolution == 16) unit = 2;
-	if (channel == 2) unit *= 2;
+	uint16_t cnt = playcnt;
 
-	while (size > unit) {
-		if (channel == 1) {
-			if (resolution == 8) {
-				uint16_t d = buff[size-1];
-				d <<= 4;
-				buff[size*2-2] = d;
-				--size;
-			}
-			else {
-				uint16_t d = *(uint16_t*)buff + 0x8000;
-				d >>= 4;
-				*(uint16_t*)buff = d;
-				buff += 2;
-				size -= 2;
-			}
-		}
-		else {
-			if (resolution == 8) {
-				uint16_t d = *buff;
-				d += *(buff+1);
-				d <<= 3;
-				*(uint16_t*)buff = d;
-				buff += 2;
-				size -= 2;
-			}
-			else {
-				uint16_t d = (*(uint16_t*)buff + 0x8000) >> 1;
-				d += (*(uint16_t*)(buff+2) + 0x8000) >> 1;
-				*(uint16_t*)(buff+ct) = d >> 3;
-				buff += unit;
-				size -= unit;
-			}
-		}
-		ct += 2;
+	if (cnt) {
+		DACA.CH0DATA = *playp++;
+		playcnt = cnt - 2;
 	}
-
-	return ct;
 }
 
 void playfile(FIL* fp)
@@ -157,11 +205,13 @@ void playfile(FIL* fp)
 
 	size = loadheader(fp);
 
+	trace_num = 0;
+
 	UINT pad = 512 - (fp->fptr % 512);
 	if (pad == 0) pad = 512;
 	f_read(fp, &buffer[0][0], pad, &rb);
 	if (pad != rb) return;
-	buffer_ct[0] = make_dac_data(buffer[0], rb);
+	buffer_ct[0] = (*transfer)(buffer[0], rb);
 	size -= rb;
 
 	if (resolution == 8 && channel == 1) rsize = 512;
@@ -169,32 +219,43 @@ void playfile(FIL* fp)
 
 	f_read(fp, &buffer[1][0], rsize, &rb);
 	if (rb != rsize) return;
-	buffer_ct[1] = make_dac_data(buffer[1], rb);
+	buffer_ct[1] = (*transfer)(buffer[1], rb);
 	size -= rb;
 
 	play_buffer = 0;
-
-	startplayisr();
+	playcnt = buffer_ct[0];
+	playp = (uint16_t*)(buffer[0]);
+	startplay();
 
 	set_sleep_mode(SLEEP_MODE_IDLE);
-	while (size || buffer_ct[play_buffer] >= 4) {
-		sleep_mode();
-		timer_proc();
+	while (size || playcnt) {
+		do {
+			sleep_mode();
+			timer_proc();
+		} while ( playcnt );
 
-		if (size && buffer_ct[play_buffer] == 0) {
-			cli();
-			play_buffer = 1 - play_buffer;
-			sei();
+		uint16_t cur_buffer = play_buffer;
+		uint16_t next_buffer = 1 - play_buffer;
 
+		cli();
+		playp = (uint16_t*)(buffer[next_buffer]);
+		playcnt = buffer_ct[next_buffer];
+		sei();
+
+		if (size) {
 			rsize = (size >= rsize) ? rsize : size;
-			f_read(fp, &buffer[1-play_buffer][0], rsize, &rb);
+			f_read(fp, &buffer[cur_buffer][0], rsize, &rb);
 			if (rb != rsize) break;
-			buffer_ct[1-play_buffer] = make_dac_data(buffer[1-play_buffer], rb);
+			buffer_ct[cur_buffer] = (*transfer)(buffer[cur_buffer], rb);
 			size -= rb;
+		} else {
+			buffer_ct[cur_buffer] = 0;
 		}
+		play_buffer = next_buffer;
 	}
 
-	stopplayisr();
+	set_led_digit(9999);
+	stopplay();
 	f_close(fp);
 
 	return;

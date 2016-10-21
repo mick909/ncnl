@@ -31,27 +31,6 @@ main_clocksource_select:
 .endfunc
 
 ;---------------------------------------------------------------------------;
-; ISR(TCD5_OVF_vect)
-;   Output Audio Sampling data to DAC0
-
-.global TCD5_OVF_vect
-.func TCD5_OVF_vect
-TCD5_OVF_vect:
-	push	r24
-	LOAD	r24, SREG
-	push	r24
-
-	ldi		r24, TC5_OVFIF_bm;
-	STORE	TCD5_INTFLAGS, r24
-
-
-	pop		r24
-	STORE	SREG, r24
-	pop		r24
-	reti
-.endfunc
-
-;---------------------------------------------------------------------------;
 ; ISR(TCC4_CCx_vect)
 ;   update LED dynamic drive per 2.5 ms x 4 digit
 

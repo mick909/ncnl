@@ -156,12 +156,13 @@ void rcvr_spi_multi_512 (
 	EDMA.CH3.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
 
 	set_sleep_mode(SLEEP_MODE_IDLE);
-	while ( !(EDMA.INTFLAGS & EDMA_CH2TRNFIF_bm) ) {
+	while ( !(EDMA.CH2.CTRLB  & EDMA_CH_TRNIF_bm) ) {
 		sleep_mode();
 		timer_proc();
 	}
 
-	EDMA.INTFLAGS |= EDMA_CH2TRNFIF_bm | EDMA_CH3TRNFIF_bm;
+	EDMA.CH2.CTRLB = EDMA_CH_TRNIF_bm;
+	EDMA.CH3.CTRLB = EDMA_CH_TRNIF_bm;
 }
 
 static
