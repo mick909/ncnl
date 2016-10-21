@@ -50,7 +50,7 @@ void play_wav(void)
 
 	/* Setup DMA for USART SPI */
 	EDMA.CTRL = EDMA_ENABLE_bm | EDMA_CHMODE_STD0_gc
-			   | EDMA_DBUFMODE_DISABLE_gc | EDMA_PRIMODE_CH0123_gc;
+			   | EDMA_DBUFMODE_DISABLE_gc | EDMA_PRIMODE_RR0123_gc;
 
 	f_mount(&fs, "", 0);
 	scan_files();
