@@ -5,21 +5,21 @@
 #include "sdaudio.h"
 #include "ff.h"
 
-#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+#define EDMACH	CH2
 
-void set_led_digit(uint16_t v);
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
 
 #define FCC(c1,c2,c3,c4)	(((DWORD)c4<<24)+((DWORD)c3<<16)+((WORD)c2<<8)+(BYTE)c1)	/* FourCC */
 #define	LD_WORD(ptr)		(WORD)(*(WORD*)(BYTE*)(ptr))
 #define	LD_DWORD(ptr)		(DWORD)(*(DWORD*)(BYTE*)(ptr))
-
-volatile uint16_t trace_num;
 
 BYTE buffer[2][1024];
 volatile uint16_t buffer_ct[2];
 volatile uint8_t play_buffer;
 volatile uint16_t* playp;
 volatile uint16_t playcnt;
+
+volatile uint16_t dummy;
 
 uint16_t (* volatile transfer)(BYTE* p, uint16_t size);
 
@@ -31,39 +31,26 @@ void timer_proc(void);
 
 void startplay(void)
 {
-#if 0
-	DACA.EVCTRL = DAC_EVSEL_0_gc;
-	DACA.CTRLB = DAC_CHSEL_SINGLE_gc | DAC_CH0TRIG_bm;
-#else
-	DACA.CTRLB = DAC_CHSEL_SINGLE_gc;
-#endif
-	DACA.CTRLC = DAC_REFSEL_AVCC_gc | DAC_LEFTADJ_bm;
-	DACA.CTRLA = DAC_CH0EN_bm | DAC_ENABLE_bm;
+	DACA.EVCTRL = DAC_EVSEL_2_gc;
+	DACA.CTRLB  = DAC_CHSEL_SINGLE_gc | DAC_CH0TRIG_bm;
+	DACA.CTRLC  = DAC_REFSEL_AVCC_gc | DAC_LEFTADJ_bm;
+	DACA.CTRLA  = DAC_CH0EN_bm | DAC_ENABLE_bm;
 
 	PORTA.OUTCLR = PIN3_bm;
 
-#if 0
-	EDMA.CH0.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
-	EDMA.CH0.DESTADDRCTRL = EDMA_CH_RELOAD_BURST_gc | EDMA_CH_DIR_INC_gc;
-	EDMA.CH0.TRFCNT   = playcnt;
-	EDMA.CH0.ADDR     = (uint16_t)(playp);
-	EDMA.CH0.DESTADDR = (uint16_t)(&DACA.CH0DATA);
+	EDMA.EDMACH.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc  | EDMA_CH_DIR_INC_gc;
+	EDMA.EDMACH.TRFCNTL  = (playcnt / 2) & 0xff;
+	EDMA.EDMACH.ADDR     = ((uint16_t)playp);
+	EDMA.EDMACH.TRIGSRC  = EDMA_CH_TRIGSRC_DACA_CH0_gc;
 
-	EDMA.CH0.TRIGSRC  = EDMA_CH_TRIGSRC_DACA_CH0_gc;
-
-	EDMA.CH0.CTRLB = EDMA_CH_TRNIF_bm;
-	EDMA.CH0.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm | EDMA_CH_BURSTLEN_bm;
-#endif
+	EDMA.EDMACH.CTRLB = EDMA_CH_TRNIF_bm | 0x03;
+	EDMA.EDMACH.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm | EDMA_CH_BURSTLEN_bm;
 
 	TCD5.CTRLB    = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
 	TCD5.CNT      = 0;
 	TCD5.PER      = freq - 1;
-	TCD5.INTCTRLA = TC45_OVFINTLVL_HI_gc;
-	TCD5.INTFLAGS = TC5_OVFIF_bm;
 	TCD5.CTRLA    = TC45_CLKSEL_DIV1_gc;
-#if 0
-	EVSYS.CH0MUX  = EVSYS_CHMUX_TCD5_OVF_gc;
-#endif
+	EVSYS.CH2MUX = EVSYS_CHMUX_TCD5_OVF_gc;
 }
 
 void stopplay(void)
@@ -207,18 +194,25 @@ DWORD loadheader (FIL* fp)	/* 0:Invalid format, 1:I/O error, >=1024:Number of sa
 	return 0;
 }
 
-ISR(TCD5_OVF_vect) {
-	TCD5.INTFLAGS = TC5_OVFIF_bm;
+ISR(EDMA_CH2_vect)
+{
+	uint16_t next_buffer = 1 - play_buffer;
+	uint16_t next_cnt = buffer_ct[next_buffer];
+	uint16_t playp = (uint16_t)(buffer[next_buffer]);
 
-#if 0
-#else
-	uint16_t cnt = playcnt;
+	if (next_cnt) {
+		EDMA.EDMACH.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
+		EDMA.EDMACH.TRFCNT   = (next_cnt / 2) & 0xff;
+		EDMA.EDMACH.ADDR     =  playp;
 
-	if (cnt) {
-		DACA.CH0DATA = *playp++;
-		playcnt = cnt - 2;
+		EDMA.EDMACH.TRIGSRC  = EDMA_CH_TRIGSRC_DACA_CH0_gc;
+
+		EDMA.EDMACH.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm | EDMA_CH_BURSTLEN_bm;
+		EDMA.EDMACH.CTRLB = EDMA_CH_TRNIF_bm | 0x03;
+	} else {
+		EDMA.EDMACH.CTRLB = EDMA_CH_TRNIF_bm;
 	}
-#endif
+	playcnt = 0;
 }
 
 void playfile(FIL* fp)
@@ -229,17 +223,15 @@ void playfile(FIL* fp)
 
 	size = loadheader(fp);
 
-	trace_num = 0;
-
-	UINT pad = 512 - (fp->fptr % 512);
-	if (pad == 0) pad = 512;
+	UINT pad = 256 - (fp->fptr % 256);
+	if (pad == 0) pad = 256;
 	f_read(fp, &buffer[0][0], pad, &rb);
 	if (pad != rb) return;
 	buffer_ct[0] = (*transfer)(buffer[0], rb);
 	size -= rb;
 
-	if (resolution == 8 && channel == 1) rsize = 512;
-	else rsize = 1024;
+	if (resolution == 8 && channel == 1) rsize = 256;
+	else rsize = 512;
 
 	f_read(fp, &buffer[1][0], rsize, &rb);
 	if (rb != rsize) return;
@@ -254,36 +246,18 @@ void playfile(FIL* fp)
 	set_sleep_mode(SLEEP_MODE_IDLE);
 	while (size || playcnt) {
 		do {
-			sleep_mode();
-			timer_proc();
-#if 0
-		} while ( !(EDMA.CH0.CTRLB & EDMA_CH_TRNIF_bm) );
-#else
+//			timer_proc();
+//			sleep_mode();
 		} while (playcnt);
-#endif
 
 		uint16_t cur_buffer = play_buffer;
 		uint16_t next_buffer = 1 - play_buffer;
+		uint16_t next_cnt = buffer_ct[next_buffer];
 
-#if 0
-		playp = (uint16_t*)(buffer[next_buffer]);
-		playcnt = buffer_ct[next_buffer];
-#else
 		cli();
-		playp = (uint16_t*)(buffer[next_buffer]);
-		playcnt = buffer_ct[next_buffer];
+		playcnt = next_cnt;
 		sei();
-#endif
 
-#if 0
-		EDMA.CH0.CTRLB = EDMA_CH_TRNIF_bm;
-		if (playcnt) {
-			EDMA.CH0.TRFCNT   = playcnt;
-			EDMA.CH0.ADDR     = (uint16_t)(playp);
-			EDMA.CH0.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm | EDMA_CH_BURSTLEN_bm;
-		}
-#else
-#endif
 		if (size) {
 			rsize = (size >= rsize) ? rsize : size;
 			f_read(fp, &buffer[cur_buffer][0], rsize, &rb);
@@ -296,7 +270,6 @@ void playfile(FIL* fp)
 		play_buffer = next_buffer;
 	}
 
-	set_led_digit(9999);
 	stopplay();
 	f_close(fp);
 

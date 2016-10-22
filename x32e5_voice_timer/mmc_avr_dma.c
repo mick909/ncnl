@@ -93,20 +93,20 @@ void power_on (void)
 	USARTC0.CTRLB = USART_TXEN_bm | USART_RXEN_bm;
 	USARTC0.BAUDCTRLA = 63;
 
-	/* DMA Chennel2 -> Transfer from USARTC0.Data to buffer */
-	EDMA.CH2.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
-	EDMA.CH2.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_RXC_gc;
+	/* DMA Chennel0 -> Transfer from USARTC0.Data to buffer */
+	EDMA.CH0.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
+	EDMA.CH0.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_RXC_gc;
 
 	/* DMA Chennel3 -> Transfer dummy 0xff to USARTC0.Data */
-	EDMA.CH3.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
-	EDMA.CH3.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_DRE_gc;
+	EDMA.CH1.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
+	EDMA.CH1.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_DRE_gc;
 }
 
 static
 void power_off (void)
 {
-	EDMA.CH2.CTRLA = 0;
-	EDMA.CH3.CTRLA = 0;
+	EDMA.CH0.CTRLA = 0;
+	EDMA.CH1.CTRLA = 0;
 
 	USARTC0.CTRLB     = 0;
 
@@ -133,7 +133,6 @@ BYTE xchg_spi (		/* Returns received data */
 	return USARTC0.DATA;
 }
 
-
 /* Receive a data block fast */
 static
 void rcvr_spi_multi_512 (
@@ -143,26 +142,26 @@ void rcvr_spi_multi_512 (
 {
 	volatile uint8_t dmy = 0xff;
 
-	/* DMA Chennel2 -> Transfer from USARTC0.Data to buffer */
-	EDMA.CH2.ADDR     = (uint16_t)(p);
-	EDMA.CH2.TRFCNTL  = cnt;
+	/* DMA Chennel0 -> Transfer from USARTC0.Data to buffer */
+	EDMA.CH0.ADDR     = (uint16_t)(p);
+	EDMA.CH0.TRFCNTL  = cnt;
 
-	/* DMA Chennel3 -> Transfer dummy 0xff to USARTC0.Data */
-	EDMA.CH3.ADDR     = (uint16_t)(&dmy);
-	EDMA.CH3.TRFCNTL  = cnt;
+	/* DMA Chennel1 -> Transfer dummy 0xff to USARTC0.Data */
+	EDMA.CH1.ADDR     = (uint16_t)(&dmy);
+	EDMA.CH1.TRFCNTL  = cnt;
 
 	/* To make stable transmission, Rx must be enaled first ! */
-	EDMA.CH2.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
-	EDMA.CH3.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
+	EDMA.CH0.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
+	EDMA.CH1.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
 
 	set_sleep_mode(SLEEP_MODE_IDLE);
-	while ( !(EDMA.CH2.CTRLB  & EDMA_CH_TRNIF_bm) ) {
-		sleep_mode();
-		timer_proc();
+	while ( !(EDMA.CH0.CTRLB & EDMA_CH_TRNIF_bm) ) {
+//		timer_proc();
+//		sleep_mode();
 	}
 
-	EDMA.CH2.CTRLB = EDMA_CH_TRNIF_bm;
-	EDMA.CH3.CTRLB = EDMA_CH_TRNIF_bm;
+	EDMA.CH0.CTRLB = EDMA_CH_TRNIF_bm;
+	EDMA.CH1.CTRLB = EDMA_CH_TRNIF_bm;
 }
 
 static
@@ -171,6 +170,15 @@ void rcvr_spi_multi (
 	UINT cnt	/* Size of data block */
 )
 {
+#if 0
+	do {
+		while ( !(USARTC0.STATUS & USART_DREIF_bm));
+		USARTC0.DATA = 0xff;
+		while ( !(USARTC0.STATUS & USART_RXCIF_bm));
+		*p++ = USARTC0.DATA;
+	} while (--cnt);
+	return;
+#endif
 	while (cnt > 512) {
 		rcvr_spi_multi_512(p, 0);
 		cnt -= 512;

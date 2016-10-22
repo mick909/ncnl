@@ -138,7 +138,7 @@ ISR(TCC4_OVF_vect)
 inline
 void setupTCC4_10ms(void)
 {
-	EVSYS.CH2MUX = EVSYS_CHMUX_TCC4_OVF_gc;
+	EVSYS.CH0MUX = EVSYS_CHMUX_TCC4_OVF_gc;
 
 	/* Normal Operation */
 	/* EV CH0 */
@@ -147,7 +147,7 @@ void setupTCC4_10ms(void)
 	TCC5.CNT = 0;
 	TCC5.PER = 60000 - 1;
 	TCC5.INTFLAGS = TC5_OVFIF_bm;
-	TCC5.CTRLA = TC45_CLKSEL_EVCH2_gc;
+	TCC5.CTRLA = TC45_CLKSEL_EVCH0_gc;
 
 	/* Normal Operation */
 	/* 10MHz div8 / 12500 = 100Hz */
