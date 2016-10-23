@@ -40,7 +40,6 @@ TCC4_CCA_vect:
 	push	r24
 	LOAD	r24, SREG
 	push	r24
-	push	r25
 
 	lds		r24, tcc4_intflags
 	ori		r24, TC4_CCAIF_bm
@@ -61,7 +60,6 @@ TCC4_CCA_vect:
 	sts		Timer2, r24
 1:
 
-	pop		r25
 	pop		r24
 	STORE	SREG, r24
 	pop		r24
