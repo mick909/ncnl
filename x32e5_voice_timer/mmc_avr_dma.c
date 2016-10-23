@@ -63,6 +63,8 @@ BYTE Timer1, Timer2;	/* 100Hz decrement timer */
 static
 BYTE CardType;			/* Card type flags (b0:MMC, b1:SDv1, b2:SDv2, b3:Block addressing) */
 
+volatile uint8_t dmy = 0xff;
+
 void timer_proc(void);
 
 /*-----------------------------------------------------------------------*/
@@ -93,20 +95,31 @@ void power_on (void)
 	USARTC0.CTRLB = USART_TXEN_bm | USART_RXEN_bm;
 	USARTC0.BAUDCTRLA = 63;
 
-	/* DMA Chennel0 -> Transfer from USARTC0.Data to buffer */
-	EDMA.CH0.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
-	EDMA.CH0.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_RXC_gc;
+	/* Setup DMA for USART SPI */
+	EDMA.CTRL = EDMA_ENABLE_bm | EDMA_CHMODE_STD02_gc
+			   | EDMA_DBUFMODE_DISABLE_gc | EDMA_PRIMODE_CH0123_gc;
 
-	/* DMA Chennel3 -> Transfer dummy 0xff to USARTC0.Data */
-	EDMA.CH1.ADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
-	EDMA.CH1.TRIGSRC  = EDMA_CH_TRIGSRC_USARTC0_DRE_gc;
+	/* DMA Chennel0 -> Transfer from USARTC0.Data to buffer */
+	EDMA.CH0.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
+	EDMA.CH0.ADDR         = (uint16_t)(&USARTC0.DATA);
+	EDMA.CH0.DESTADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
+	EDMA.CH0.TRIGSRC      = EDMA_CH_TRIGSRC_USARTC0_RXC_gc;
+
+	/* DMA Chennel2 -> Transfer dummy 0xff to USARTC0.Data */
+	EDMA.CH2.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
+	EDMA.CH2.ADDR         = (uint16_t)(&dmy);
+	EDMA.CH2.DESTADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
+	EDMA.CH2.DESTADDR     = (uint16_t)(&USARTC0.DATA);
+	EDMA.CH2.TRIGSRC      = EDMA_CH_TRIGSRC_USARTC0_DRE_gc;
 }
 
 static
 void power_off (void)
 {
 	EDMA.CH0.CTRLA = 0;
-	EDMA.CH1.CTRLA = 0;
+	EDMA.CH2.CTRLA = 0;
+
+	EDMA.CTRL = 0;
 
 	USARTC0.CTRLB     = 0;
 
@@ -135,58 +148,30 @@ BYTE xchg_spi (		/* Returns received data */
 
 /* Receive a data block fast */
 static
-void rcvr_spi_multi_512 (
-	BYTE *p,	/* Data read buffer */
-	uint8_t cnt	/* Size of data block */
-)
-{
-	volatile uint8_t dmy = 0xff;
-
-	/* DMA Chennel0 -> Transfer from USARTC0.Data to buffer */
-	EDMA.CH0.ADDR     = (uint16_t)(p);
-	EDMA.CH0.TRFCNTL  = cnt;
-
-	/* DMA Chennel1 -> Transfer dummy 0xff to USARTC0.Data */
-	EDMA.CH1.ADDR     = (uint16_t)(&dmy);
-	EDMA.CH1.TRFCNTL  = cnt;
-
-	/* To make stable transmission, Rx must be enaled first ! */
-	EDMA.CH0.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
-	EDMA.CH1.CTRLA = EDMA_CH_ENABLE_bm | EDMA_CH_REPEAT_bm | EDMA_CH_SINGLE_bm;
-
-	set_sleep_mode(SLEEP_MODE_IDLE);
-	while ( !(EDMA.CH0.CTRLB & EDMA_CH_TRNIF_bm) ) {
-//		timer_proc();
-//		sleep_mode();
-	}
-
-	EDMA.CH0.CTRLB = EDMA_CH_TRNIF_bm;
-	EDMA.CH1.CTRLB = EDMA_CH_TRNIF_bm;
-}
-
-static
 void rcvr_spi_multi (
 	BYTE *p,	/* Data read buffer */
 	UINT cnt	/* Size of data block */
 )
 {
-#if 0
-	do {
-		while ( !(USARTC0.STATUS & USART_DREIF_bm));
-		USARTC0.DATA = 0xff;
-		while ( !(USARTC0.STATUS & USART_RXCIF_bm));
-		*p++ = USARTC0.DATA;
-	} while (--cnt);
-	return;
-#endif
-	while (cnt > 512) {
-		rcvr_spi_multi_512(p, 0);
-		cnt -= 512;
-		p += 512;
+	/* DMA Chennel0 -> Transfer from USARTC0.Data to buffer */
+	EDMA.CH0.DESTADDR = (uint16_t)(p);
+	EDMA.CH0.TRFCNT   = (uint16_t)cnt;
+
+	/* DMA Chennel1 -> Transfer dummy 0xff to USARTC0.Data */
+	EDMA.CH2.TRFCNT   = (uint16_t)cnt;
+
+	/* To make stable transmission, Rx must be enaled first ! */
+	EDMA.CH0.CTRLA    = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
+	EDMA.CH2.CTRLA    = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
+
+	set_sleep_mode(SLEEP_MODE_IDLE);
+	while ( !(EDMA.CH0.CTRLB & EDMA_CH_TRNIF_bm) ) {
+		timer_proc();
+		sleep_mode();
 	}
-	if (cnt) {
-		rcvr_spi_multi_512(p, (cnt>>1));
-	}
+
+	EDMA.CH0.CTRLB    = EDMA_CH_TRNIF_bm;
+	EDMA.CH2.CTRLB    = EDMA_CH_TRNIF_bm;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -199,7 +184,6 @@ int wait_ready (	/* 1:Ready, 0:Timeout */
 )
 {
 	BYTE d;
-
 
 	Timer2 = wt / 10;
 	do
