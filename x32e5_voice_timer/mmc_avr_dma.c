@@ -63,8 +63,6 @@ BYTE Timer1, Timer2;	/* 100Hz decrement timer */
 static
 BYTE CardType;			/* Card type flags (b0:MMC, b1:SDv1, b2:SDv2, b3:Block addressing) */
 
-volatile uint8_t dmy = 0xff;
-
 void timer_proc(void);
 
 /*-----------------------------------------------------------------------*/
@@ -76,55 +74,12 @@ void timer_proc(void);
 static
 void power_on (void)
 {
-	/* SS   = PC0 = Out,hi   */
-	/* SCK  = PC1 = Out,lo   */
-	/* MISO = PC2 = In, hi-z */
-	/* MOSI = PC3 = Out,hi   */
 
-	PORTC.DIRSET   = PIN0_bm;
-	PORTC.OUTSET   = PIN0_bm;
-
-	PORTC.DIRSET = PIN1_bm | PIN3_bm;
-	PORTC.OUTCLR = PIN1_bm;
-	PORTC.OUTSET = PIN3_bm;
-
-	PORTC.DIRCLR = PIN2_bm;
-
-	/* Setup USART C0 as MSPI mode */
-	USARTC0.CTRLC = USART_CMODE_MSPI_gc;	/* SPI Mode 0, MSB first */
-	USARTC0.CTRLB = USART_TXEN_bm | USART_RXEN_bm;
-	USARTC0.BAUDCTRLA = 63;
-
-	/* Setup DMA for USART SPI */
-	EDMA.CTRL = EDMA_ENABLE_bm | EDMA_CHMODE_STD02_gc
-			   | EDMA_DBUFMODE_DISABLE_gc | EDMA_PRIMODE_CH0123_gc;
-
-	/* DMA Chennel0 -> Transfer from USARTC0.Data to buffer */
-	EDMA.CH0.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
-	EDMA.CH0.ADDR         = (uint16_t)(&USARTC0.DATA);
-	EDMA.CH0.DESTADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_INC_gc;
-	EDMA.CH0.TRIGSRC      = EDMA_CH_TRIGSRC_USARTC0_RXC_gc;
-
-	/* DMA Chennel2 -> Transfer dummy 0xff to USARTC0.Data */
-	EDMA.CH2.ADDRCTRL     = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
-	EDMA.CH2.ADDR         = (uint16_t)(&dmy);
-	EDMA.CH2.DESTADDRCTRL = EDMA_CH_RELOAD_NONE_gc | EDMA_CH_DIR_FIXED_gc;
-	EDMA.CH2.DESTADDR     = (uint16_t)(&USARTC0.DATA);
-	EDMA.CH2.TRIGSRC      = EDMA_CH_TRIGSRC_USARTC0_DRE_gc;
 }
 
 static
 void power_off (void)
 {
-	EDMA.CH0.CTRLA = 0;
-	EDMA.CH2.CTRLA = 0;
-
-	EDMA.CTRL = 0;
-
-	USARTC0.CTRLB     = 0;
-
-	PORTC.OUTSET = PIN0_bm;
-
 	Stat |= STA_NOINIT;
 }
 
@@ -146,6 +101,11 @@ BYTE xchg_spi (		/* Returns received data */
 	return USARTC0.DATA;
 }
 
+ISR(EDMA_CH0_vect)
+{
+	EDMA.CH0.CTRLB = 0;
+}
+
 /* Receive a data block fast */
 static
 void rcvr_spi_multi (
@@ -157,8 +117,10 @@ void rcvr_spi_multi (
 	EDMA.CH0.DESTADDR = (uint16_t)(p);
 	EDMA.CH0.TRFCNT   = (uint16_t)cnt;
 
-	/* DMA Chennel1 -> Transfer dummy 0xff to USARTC0.Data */
+	/* DMA Chennel2 -> Transfer dummy 0xff to USARTC0.Data */
 	EDMA.CH2.TRFCNT   = (uint16_t)cnt;
+
+	EDMA.CH0.CTRLB    = EDMA_CH_TRNIF_bm | 0x01;
 
 	/* To make stable transmission, Rx must be enaled first ! */
 	EDMA.CH0.CTRLA    = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
@@ -186,9 +148,10 @@ int wait_ready (	/* 1:Ready, 0:Timeout */
 	BYTE d;
 
 	Timer2 = wt / 10;
-	do
+	do {
+		timer_proc();
 		d = xchg_spi(0xFF);
-	while (d != 0xFF && Timer2);
+	} while (d != 0xFF && Timer2);
 
 	return (d == 0xFF) ? 1 : 0;
 }
@@ -317,9 +280,10 @@ BYTE send_cmd (		/* Returns R1 resp (bit7==1:Send failed) */
 	/* Receive command response */
 	if (cmd == CMD12) xchg_spi(0xFF);		/* Skip a stuff byte when stop reading */
 	n = 10;								/* Wait for a valid response in timeout of 10 attempts */
-	do
+	do {
+		timer_proc();
 		res = xchg_spi(0xFF);
-	while ((res & 0x80) && --n);
+	} while ((res & 0x80) && --n);
 
 	return res;			/* Return with the response value */
 }
@@ -345,7 +309,9 @@ DSTATUS disk_initialize (
 	if (pdrv) return STA_NOINIT;		/* Supports only single drive */
 
 	power_off();						/* Turn off the socket power to reset the card */
-	for (Timer1 = 10; Timer1; ) ;		/* Wait for 100ms */
+	for (Timer1 = 10; Timer1; ) {		/* Wait for 100ms */
+		timer_proc();
+	}
 	if (Stat & STA_NODISK) return Stat;	/* No card in the socket? */
 
 	power_on();							/* Turn on the socket power */
