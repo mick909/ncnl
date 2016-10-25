@@ -39,8 +39,22 @@ void set_led_digit(uint16_t v);
 
 void play_wav(void);
 
+void setup_RC32K(void)
+{
+	if (CLK_CTRL == CLK_SCLKSEL_RC32K_gc) return;
+
+	/* Enable 32.768Hz Internal Oscillator */
+	OSC.CTRL |= OSC_RC32KEN_bm;
+
+	/* wait until stable. */
+	do {} while ( !(OSC.STATUS & OSC_RC32KRDY_bm) );
+	main_clocksource_select(CLK_SCLKSEL_RC32K_gc);
+}
+
 void setup_RC2M(void)
 {
+	if (CLK_CTRL == CLK_SCLKSEL_RC2M_gc) return;
+
 	/* Enable 2MHz Internal Oscillator */
 	OSC.CTRL |= OSC_RC2MEN_bm;
 
@@ -51,6 +65,8 @@ void setup_RC2M(void)
 
 void setup_XOSC_EXT(void)
 {
+	if (CLK_CTRL == CLK_SCLKSEL_XOSC_gc) return;
+
 	/* Select XTAL1 for external oscillator. */
 	OSC.XOSCCTRL = OSC_FRQRANGE_9TO12_gc | OSC_XOSCSEL_EXTCLK_gc;
 
@@ -67,10 +83,10 @@ void setup_XOSC_EXT(void)
 /*-----------------------------------------------------------------------*/
 volatile uint32_t y = 2463534242;
 
-uint32_t xorshift(void)
+uint16_t xorshift(void)
 {
   y ^= (y<<13); y ^= (y >> 17); y ^= (y << 5);
-  return y;
+  return (uint16_t)y;
 }
 
 inline
@@ -165,19 +181,8 @@ void update_led(uint8_t intf)
 }
 
 inline
-void setupTCC4_10ms(void)
+void setupTCC4(void)
 {
-	EVSYS.CH0MUX = EVSYS_CHMUX_TCC4_OVF_gc;
-
-	/* Normal Operation */
-	/* EV CH0 */
-	/* TOP = 60000 */
-	TCC5.CTRLB = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
-	TCC5.CNT = 0;
-	TCC5.PER = 60000 - 1;
-	TCC5.INTFLAGS = TC5_OVFIF_bm;
-	TCC5.CTRLA = TC45_CLKSEL_EVCH0_gc;
-
 	/* Normal Operation */
 	/* 10MHz div8 / 12500 = 100Hz */
 	/* Interrupt at 1562, 4687, 7812, 10937 (Level = Lo) */
@@ -192,6 +197,22 @@ void setupTCC4_10ms(void)
 	TCC4.INTFLAGS = TC4_CCDIF_bm | TC4_CCCIF_bm | TC4_CCBIF_bm | TC4_CCAIF_bm | TC4_OVFIF_bm;
 	TCC4.CTRLA = TC45_CLKSEL_DIV8_gc;
 }
+
+inline
+void setupTCC5(void)
+{
+	EVSYS.CH0MUX = EVSYS_CHMUX_TCC4_OVF_gc;
+
+	/* Normal Operation */
+	/* EV CH0 */
+	/* TOP = 60000 */
+	TCC5.CTRLB = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
+	TCC5.CNT = 0;
+	TCC5.PER = 60000 - 1;
+	TCC5.INTFLAGS = TC5_OVFIF_bm;
+	TCC5.CTRLA = TC45_CLKSEL_EVCH0_gc;
+}
+
 
 void timer_proc(void)
 {
@@ -229,14 +250,19 @@ ISR(EDMA_CH1_vect)
 		DACA.CTRLA = 0;
 		DACA.CTRLB = 0;
 		DACA.CTRLC = 0;
+
+		PR.PRGEN = PR_XCL_bm | PR_RTC_bm | PR_EDMA_bm;
+		PR.PRPA  = PR_DAC_bm | PR_ADC_bm;
+		PR.PRPC  = PR_TWI_bm | PR_USART0_bm | PR_SPI_bm | PR_HIRES_bm;
+		PR.PRPD  = PR_TC5_bm;
 	}
 }
 
 static
 void output_buzzer(void)
 {
-	/* (0.4(sec) / (42(sample) / 16000Hz)) / 2(repeat) = 76 */
-	buzz_cnt = 76;
+	/* (0.5(sec) / (42(sample) / 16000Hz)) / 2(repeat) = 95 */
+	buzz_cnt = 95;
 
 	DACA.EVCTRL  = DAC_EVSEL_1_gc;
 	DACA.CTRLB   = DAC_CHSEL_SINGLE_gc | DAC_CH0TRIG_bm;
@@ -268,12 +294,103 @@ void output_buzzer(void)
 volatile uint8_t rtccnt;
 volatile uint8_t rtcflag;
 
+extern uint8_t Timer1, Timer2;	/* 100Hz decrement timer */
+
 ISR(RTC_OVF_vect)
 {
-	uint8_t cnt = rtccnt;
-	cnt = (cnt + 1) & 0x03;
-	rtccnt = cnt;
-	rtcflag = cnt;
+	uint8_t n = rtccnt;
+
+	n = (n + 1) & 0x03;
+	rtccnt = n;
+	rtcflag = n;
+
+	n = Timer1;				/* 100Hz decrement timer */
+	if (n) Timer1 = --n;
+	n = Timer2;
+	if (n) Timer2 = --n;
+}
+
+ISR(PORTC_INT_vect)
+{
+	PORTC.INTCTRL = 0;
+	PORTC.INTMASK  = 0;
+	PORTC.PIN4CTRL = PORT_OPC_PULLUP_gc;
+	PORTC.PIN6CTRL = PORT_OPC_PULLUP_gc;
+}
+
+/*-----------------------------------------------------------------------*/
+/* SLEEP Mode                                                            */
+/*-----------------------------------------------------------------------*/
+static
+uint8_t sleep(void)
+{
+	output_led(0xff, 0);
+
+	PORTD.OUTCLR = PIN7_bm;	/* MOSI = L to 74AC164 */
+
+	PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTD.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+
+	setup_RC32K();
+	OSC.CTRL &= ~(OSC_XOSCEN_bm | OSC_RC2MEN_bm);
+
+	/* enable RTC & clocl source select ULP 1kHz */
+	PR.PRGEN = PR_XCL_bm | PR_EVSYS_bm | PR_EDMA_bm;
+	PR.PRPA  = PR_DAC_bm | PR_ADC_bm | PR_AC_bm;
+	PR.PRPC  = PR_TWI_bm | PR_USART0_bm | PR_SPI_bm | PR_HIRES_bm | PR_TC5_bm | PR_TC4_bm;
+	PR.PRPD  = PR_USART0_bm | PR_TC5_bm;
+
+	CLK.RTCCTRL = CLK_RTCSRC_ULP_gc | CLK_RTCEN_bm;
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+
+	RTC.PER = 1000-1;		/* 1 Sec */
+	RTC.CNT = 0;
+	RTC.INTFLAGS = RTC_OVFIF_bm;
+	RTC.INTCTRL  = RTC_OVFINTLVL_LO_gc;
+	RTC.CTRL     = RTC_PRESCALER_DIV1_gc;
+
+	PORTC.PIN4CTRL = PORT_OPC_PULLUP_gc | PORT_ISC_LEVEL_gc;
+	PORTC.PIN6CTRL = PORT_OPC_PULLUP_gc | PORT_ISC_LEVEL_gc;
+	PORTC.INTFLAGS = 0xff;
+	PORTC.INTMASK  = PIN4_bm | PIN6_bm;
+	PORTC.INTCTRL  = PORT_INTLVL_LO_gc;
+
+	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
+
+	do {
+		sleep_mode();
+
+		if (PORTC.INTFLAGS) break;
+
+		PORTD.OUTSET = PIN7_bm;	/* MOSI = L to 74AC164 */
+
+		PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+		PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+
+		PORTD.OUTCLR = PIN7_bm;
+
+		PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+		PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+
+		output_led(0xdf, 0);
+
+		sleep_mode();
+		if (PORTC.INTFLAGS) break;
+
+		output_led(0xff, 0);
+	} while (1);
+
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+	RTC.CTRL    = 0;
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+	RTC.INTCTRL = 0;
+	CLK.RTCCTRL = 0;
+
+	return !(PORTC.INTFLAGS & PORT_INT6IF_bm);
 }
 
 /*-----------------------------------------------------------------------*/
@@ -282,12 +399,13 @@ ISR(RTC_OVF_vect)
 static
 uint8_t idle(void)
 {
+	uint16_t idlecnt;
 	uint8_t count_pos;
 	uint8_t s1_status = 0xff;
 	uint8_t s2_status = 0xff;
 
 	setup_RC2M();
-	OSC.CTRL &= ~OSC_XOSCEN_bm;
+	OSC.CTRL &= ~(OSC_XOSCEN_bm | OSC_RC32KEN_bm);
 
 	rtccnt = 0;
 	rtcflag = 4;
@@ -301,16 +419,18 @@ uint8_t idle(void)
 	CLK.RTCCTRL = CLK_RTCSRC_ULP_gc | CLK_RTCEN_bm;
 	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
 
-	RTC.PER = 3-1;		/* 3ms */
+	RTC.PER = 4-1;		/* 4ms */
 	RTC.CNT = 0;
 	RTC.INTFLAGS = RTC_OVFIF_bm;
 	RTC.INTCTRL  = RTC_OVFINTLVL_LO_gc;
 	RTC.CTRL     = RTC_PRESCALER_DIV1_gc;
 
+	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
+
 	count_pos = (count_num) ? 1 : 0;
 	set_led_digit(counts[count_pos]);
 
-	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
+	idlecnt = 18750;	/* 5 * 60 * 1000 / 4 / 4 */
 	do {
 		uint8_t flag;
 
@@ -322,14 +442,17 @@ uint8_t idle(void)
 
 		if (flag == 4) continue;
 
+		if (!flag && --idlecnt == 0) break;
+//		set_led_digit( idlecnt *2 / 125);
+
 		uint8_t dig = digits[flag];
 		if (flag == 2) dig &= 0xdf;
 		output_led(dig, (flag==0));
 
-		s1_status <<= 1;
+		s1_status = (s1_status << 1) & 0x3f;
 		if ( !(PORTC.IN & PIN6_bm) ) ++s1_status;
 
-		s2_status <<= 1;
+		s2_status = (s2_status << 1) & 0x3f;
 		if ( !(PORTC.IN & PIN4_bm) ) ++s2_status;
 
 		if (s2_status == 1) {
@@ -337,13 +460,18 @@ uint8_t idle(void)
 				if (++count_pos > count_num) count_pos = 1;
 				set_led_digit(counts[count_pos]);
 			}
+
+			idlecnt = 18750;
 		}
 	} while (s1_status != 1);
 
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+	RTC.CTRL    = 0;
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
 	RTC.INTCTRL = 0;
 	CLK.RTCCTRL = 0;
 
-	return 0;
+	return s1_status != 1;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -352,37 +480,93 @@ uint8_t idle(void)
 static
 void delay(void)
 {
-	uint16_t count;
 	uint16_t delay;
 
+	output_led(0x7f, 1);
+
+	PORTD.OUTSET = PIN7_bm;	/* MOSI = H to 74AC164 */
+
+	PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTD.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+
+	setup_RC2M();
+	OSC.CTRL &= ~(OSC_XOSCEN_bm | OSC_RC32KEN_bm);
+
+	PR.PRGEN = PR_XCL_bm | PR_EVSYS_bm | PR_EDMA_bm;
+	PR.PRPA  = PR_DAC_bm | PR_ADC_bm | PR_AC_bm;
+	PR.PRPC  = PR_TWI_bm | PR_USART0_bm | PR_SPI_bm | PR_HIRES_bm | PR_TC5_bm | PR_TC4_bm;
+	PR.PRPD  = PR_USART0_bm | PR_TC5_bm;
+
+	delay = (xorshift() & (512-1)) + 500;
+
+	CLK.RTCCTRL = CLK_RTCSRC_ULP_gc | CLK_RTCEN_bm;
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+	RTC.CTRL    = 0;
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+
+	RTC.PER      = delay;
+	RTC.CNT      = 0;
+	RTC.INTFLAGS = RTC_OVFIF_bm;
+	RTC.INTCTRL  = RTC_OVFINTLVL_LO_gc;
+	RTC.CTRL     = RTC_PRESCALER_DIV1_gc;
+
+	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
+	sleep_mode();
+
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+	RTC.CTRL    = 0;
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+
 	setup_XOSC_EXT();
-	OSC.CTRL &= ~OSC_RC2MEN_bm;
+	OSC.CTRL &= ~(OSC_RC2MEN_bm | OSC_RC32KEN_bm);
 
-	PR.PRGEN = PR_XCL_bm | PR_RTC_bm;
+	PR.PRGEN = PR_XCL_bm | PR_EVSYS_bm;
 	PR.PRPA  = PR_ADC_bm | PR_AC_bm;
-	PR.PRPC  = PR_TWI_bm | PR_SPI_bm | PR_HIRES_bm;
-	PR.PRPD  = 0;
+	PR.PRPC  = PR_TWI_bm | PR_SPI_bm | PR_HIRES_bm | PR_TC5_bm | PR_TC4_bm;
+	PR.PRPD  = PR_USART0_bm;
 
-	init_usart_spi_led();
-	setupTCC4_10ms();
+	set_sleep_mode(SLEEP_MODE_IDLE);
 
-	dot = 0xff;
-	digits[0] = digits[1] = digits[2] = digits[3] = 0x7f;
+	CLK.RTCCTRL = CLK_RTCSRC_ULP_gc | CLK_RTCEN_bm;
+
+	RTC.PER      = 10-1;		/* 10 ms */
+	RTC.CNT      = 0;
+	RTC.INTFLAGS = RTC_OVFIF_bm;
+	RTC.CTRL     = RTC_PRESCALER_DIV1_gc;
 
 	play_wav();
 
-	TCC5.CNT = 0;
+	setup_RC2M();
+	OSC.CTRL &= ~(OSC_XOSCEN_bm | OSC_RC32KEN_bm);
 
-	delay = 100;
+	PR.PRGEN = PR_XCL_bm | PR_EVSYS_bm | PR_EDMA_bm;
+	PR.PRPA  = PR_DAC_bm | PR_ADC_bm | PR_AC_bm;
+	PR.PRPC  = PR_TWI_bm | PR_USART0_bm | PR_SPI_bm | PR_HIRES_bm | PR_TC5_bm | PR_TC4_bm;
+	PR.PRPD  = PR_USART0_bm | PR_TC5_bm;
 
-	do {
-		sleep_mode();
-		timer_proc();
+	delay = (xorshift() & (1024-1)) + 1200;
 
-		xorshift();
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+	RTC.CTRL    = 0;
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
 
-		count = TCC5.CNT;
-	} while (count < delay);
+	RTC.PER      = delay;
+	RTC.CNT      = 0;
+	RTC.INTFLAGS = RTC_OVFIF_bm;
+	RTC.CTRL     = RTC_PRESCALER_DIV1_gc;
+
+	set_sleep_mode(SLEEP_MODE_PWR_SAVE);
+	sleep_mode();
+
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+	RTC.CTRL    = 0;
+	do {} while ( RTC.STATUS & RTC_SYNCBUSY_bm );
+	RTC.INTCTRL = 0;
+	CLK.RTCCTRL = 0;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -394,34 +578,20 @@ uint8_t run(void)
 	uint8_t s1_status = 0xff;
 	uint8_t s2_status = 0xff;
 	uint8_t dotcnt = 50;
+	uint8_t ac_blank;
+	uint16_t idlecnt;
 
 	setup_XOSC_EXT();
-	OSC.CTRL &= ~OSC_RC2MEN_bm;
+	OSC.CTRL &= ~(OSC_RC2MEN_bm | OSC_RC32KEN_bm);
 
 	PR.PRGEN = PR_XCL_bm | PR_RTC_bm;
 	PR.PRPA  = PR_ADC_bm;
 	PR.PRPC  = PR_TWI_bm | PR_USART0_bm | PR_SPI_bm | PR_HIRES_bm;
 	PR.PRPD  = 0;
 
+	set_sleep_mode(SLEEP_MODE_IDLE);
+
 	init_usart_spi_led();
-	setupTCC4_10ms();
-
-	/* stop & reset counter */
-	TCC4.CTRLA = 0;
-	TCC4.CNT = 0;
-	TCC5.CNT = 0;
-
-	/* clear 7seg shift-reg */
-	PORTD.OUTCLR = PIN7_bm;	/* MOSI = L to 74AC164 */
-
-	PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
-	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
-	PORTD.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
-	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
-	PORTD.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
-	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
-	PORTD.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
-	PORTD.OUTTGL = PIN6_bm;	/* MISO = L, ratch & enable 74HC595 */
 
 	/* setup capture for AC */
 	TCC5.CTRLD = TC45_EVSEL_CH4_gc;
@@ -437,11 +607,13 @@ uint8_t run(void)
 
 	/* start buzzer & restart counter! */
 	output_buzzer();
-	TCC4.CTRLA = TC45_CLKSEL_DIV8_gc;
+	setupTCC4();
+	setupTCC5();
 
-	set_sleep_mode(SLEEP_MODE_IDLE);
+	ac_blank = 0;
+	idlecnt = 30000;
+
 	do {
-		uint8_t ac_blank;
 		uint16_t count;
 
 		sleep_mode();
@@ -481,6 +653,8 @@ uint8_t run(void)
 		if (TCC4.INTFLAGS & TC4_OVFIF_bm) {
 			TCC4.INTFLAGS = TC4_OVFIF_bm;
 
+			if (--idlecnt == 0) break;
+
 			if (count_num == 0) {
 				count = TCC5.CNT;
 				set_led_digit(count);
@@ -501,18 +675,20 @@ uint8_t run(void)
 			s2_status <<= 1;
 			if ( !(PORTC.IN & PIN4_bm) ) ++s2_status;
 
-			if (s1_status == 1 || s2_status == 1) break;
+			if (s1_status == 1 || s2_status == 1) {
+				if (TCC5.CNT > 60) break;
+			}
 		}
 
 	} while (1);
 
-	TCC5.CTRLD    = 0;
-	TCC5.CTRLE    = 0;
-	TCC5.INTFLAGS = TC5_CCAIF_bm;
-
 	ACA.AC0CTRL    = 0;
 	ACA.AC0MUXCTRL = 0;
 	EVSYS.CH4MUX  = 0;
+
+	TCC5.CTRLD    = 0;
+	TCC5.CTRLE    = 0;
+	TCC5.INTFLAGS = TC5_CCAIF_bm;
 
 	TCC4.INTCTRLB = 0;
 	TCC4.CTRLA    = 0;
@@ -520,6 +696,8 @@ uint8_t run(void)
 	TCD5.CTRLA    = 0;
 
 	USARTD0.CTRLC = 0;
+
+	if (idlecnt == 0) return !sleep();
 
 	return s1_status == 1;
 }
@@ -541,6 +719,7 @@ int main(void)
 	PORTA.PIN1CTRL = PORT_OPC_PULLUP_gc;
 	PORTA.PIN0CTRL = PORT_OPC_PULLUP_gc;
 	PORTA.PIN4CTRL = PORT_OPC_PULLDOWN_gc;
+	PORTA.PIN5CTRL = PORT_ISC_INPUT_DISABLE_gc;
 	PORTA.PIN6CTRL = PORT_OPC_PULLDOWN_gc;
 	PORTA.PIN7CTRL = PORT_OPC_PULLDOWN_gc;
 
@@ -590,7 +769,7 @@ int main(void)
 
 	do {
 		do {
-		} while (idle());
+		} while (idle() && sleep());
 
 		do {
 			if (PORTC.IN & PIN5_bm) delay();

@@ -20,8 +20,6 @@ volatile uint16_t freq;
 volatile uint8_t channel;
 volatile uint8_t resolution;
 
-void timer_proc(void);
-
 void startplay(void)
 {
 	DACA.CTRLB   = DAC_CHSEL_SINGLE_gc;
@@ -135,9 +133,7 @@ void playfile(FIL* fp)
 
 	startplay();
 
-	set_sleep_mode(SLEEP_MODE_IDLE);
 	while (size || fifo_ct >= 4) {
-		timer_proc();
 		sleep_mode();
 
 		if (size && fifo_ct <= 1024) {

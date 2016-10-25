@@ -63,8 +63,6 @@ BYTE Timer1, Timer2;	/* 100Hz decrement timer */
 static
 BYTE CardType;			/* Card type flags (b0:MMC, b1:SDv1, b2:SDv2, b3:Block addressing) */
 
-void timer_proc(void);
-
 /*-----------------------------------------------------------------------*/
 /* Power Control  (Platform dependent)                                   */
 /*-----------------------------------------------------------------------*/
@@ -126,9 +124,7 @@ void rcvr_spi_multi (
 	EDMA.CH0.CTRLA    = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
 	EDMA.CH2.CTRLA    = EDMA_CH_ENABLE_bm | EDMA_CH_SINGLE_bm;
 
-	set_sleep_mode(SLEEP_MODE_IDLE);
 	while ( !(EDMA.CH0.CTRLB & EDMA_CH_TRNIF_bm) ) {
-		timer_proc();
 		sleep_mode();
 	}
 
@@ -149,7 +145,6 @@ int wait_ready (	/* 1:Ready, 0:Timeout */
 
 	Timer2 = wt / 10;
 	do {
-		timer_proc();
 		d = xchg_spi(0xFF);
 	} while (d != 0xFF && Timer2);
 
@@ -281,7 +276,6 @@ BYTE send_cmd (		/* Returns R1 resp (bit7==1:Send failed) */
 	if (cmd == CMD12) xchg_spi(0xFF);		/* Skip a stuff byte when stop reading */
 	n = 10;								/* Wait for a valid response in timeout of 10 attempts */
 	do {
-		timer_proc();
 		res = xchg_spi(0xFF);
 	} while ((res & 0x80) && --n);
 
@@ -310,7 +304,6 @@ DSTATUS disk_initialize (
 
 	power_off();						/* Turn off the socket power to reset the card */
 	for (Timer1 = 10; Timer1; ) {		/* Wait for 100ms */
-		timer_proc();
 	}
 	if (Stat & STA_NODISK) return Stat;	/* No card in the socket? */
 

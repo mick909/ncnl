@@ -45,21 +45,6 @@ TCC4_CCA_vect:
 	ori		r24, TC4_CCAIF_bm
 	sts		tcc4_intflags, r24
 
-;	n = Timer1;				/* 100Hz decrement timer */
-;	if (n) Timer1 = --n;
-;	n = Timer2;
-;	if (n) Timer2 = --n;
-	lds		r24, Timer1
-	subi	r24, 1
-	brcs	1f
-	sts		Timer1, r24
-1:
-	lds		r24, Timer2
-	subi	r24, 1
-	brcs	1f
-	sts		Timer2, r24
-1:
-
 	pop		r24
 	STORE	SREG, r24
 	pop		r24
