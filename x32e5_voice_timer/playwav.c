@@ -44,9 +44,10 @@ FRESULT scan_files(void)
 	return res;
 }
 
-void play_wav(void)
+FRESULT play_wav(void)
 {
 	FATFS fs;
+	FRESULT rslt;
 	volatile uint8_t dmy = 0xff;
 
 	/* SS   = PC0 = Out,hi   */
@@ -86,7 +87,7 @@ void play_wav(void)
 	EDMA.CH2.TRIGSRC      = EDMA_CH_TRIGSRC_USARTC0_DRE_gc;
 
 	f_mount(&fs, "", 0);
-	scan_files();
+	rslt = scan_files();
 
 	EDMA.CH0.CTRLA = 0;
 	EDMA.CH2.CTRLA = 0;
@@ -95,5 +96,7 @@ void play_wav(void)
 	USARTC0.CTRLB     = 0;
 
 	PORTC.OUTSET = PIN0_bm;
+
+	return rslt;
 }
 
