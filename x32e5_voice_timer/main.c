@@ -286,6 +286,14 @@ uint8_t idle(void)
 	uint8_t s1_status = 0xff;
 	uint8_t s2_status = 0xff;
 
+	output_led(0xff, 0);
+	PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTD.OUTTGL = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+	PORTD.OUTSET = PIN6_bm; /* MISO = H, load to 74AC164 */
+	PORTD.OUTTGL = PIN6_bm;	/* MISO = L */
+
 	setup_RC2M();
 
 	/* Use peripherals
