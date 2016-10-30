@@ -10,7 +10,7 @@ VPATH   =
 DEVICE  = atxmega32e5
 
 ### Optimization level (0, 1, 2, 3, 4 or s)
-OPTIMIZE = s
+OPTIMIZE = 2
 
 ### C Standard level (c89, gnu89, c99 or gnu99)
 CSTD = gnu99

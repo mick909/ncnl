@@ -484,7 +484,35 @@ volatile const uint16_t buzz_sampl[] = {
 	0x2B0, 0x4A0
 };
 
-volatile uint8_t buzz_cnt;
+volatile const uint16_t sin_3khz[] = {
+	0x800, 0xB40, 0xDF1, 0xF9B, 0xFF4, 0xEED, 0xCB3, 0x9A9, 0x656, 0x34C,
+	0x112, 0x00B, 0x064, 0x20E, 0x4BF
+};
+
+volatile const uint16_t sin_4khz[] = {
+	0x800, 0xC53, 0xF46, 0xFEB, 0xE0B, 0xA40, 0x5BF ,0x1F4 ,0x014 ,0x0B9,
+	0x3AC
+};
+
+volatile const uint16_t buzzz[] = {
+	(uint16_t)sin_4khz,
+	(uint16_t)sin_3khz,
+	(uint16_t)buzz_sampl,
+	(uint16_t)buzz_sampl
+};
+volatile const uint8_t buzztrf[] = {11*2, 15*2, 42*2, 42*2};
+
+/* 10,000,000 / f(Hz) - 1 */
+volatile const uint16_t buzzper[] = {
+	227,	/* 44kHz */
+	227,	/* 44kHz */
+	468,	/* 21kHz */
+	624		/* 16kHz */
+};
+
+/* (0.5(sec) / (cnt(sample) / f(Hz)) / 2(repeat) = 95 */
+volatile const uint16_t buzzcnt[] = {1000, 733, 125, 95};
+volatile uint16_t buzz_cnt;
 
 ISR(EDMA_CH1_vect)
 {
@@ -497,7 +525,6 @@ ISR(EDMA_CH1_vect)
 
 		EDMA.CH1.CTRLB    = EDMA_CH_TRNIF_bm;
 
-		EDMA.CH1.CTRLA = 0;
 		EDMA.CH1.CTRLA = 0;
 		EDMA.CTRL = 0;
 
@@ -562,8 +589,8 @@ uint8_t run(void)
 
 	/* start buzzer & start counter! */
 
-	/* (0.5(sec) / (42(sample) / 16000Hz)) / 2(repeat) = 95 */
-	buzz_cnt = 95;
+	uint8_t sel = PORTA.IN & 0x03;
+	buzz_cnt = buzzcnt[sel];
 
 	DACA.EVCTRL  = DAC_EVSEL_1_gc;
 	DACA.CTRLB   = DAC_CHSEL_SINGLE_gc | DAC_CH0TRIG_bm;
@@ -576,8 +603,8 @@ uint8_t run(void)
 				| EDMA_DBUFMODE_DISABLE_gc | EDMA_PRIMODE_CH0123_gc;
 
 	EDMA.CH1.ADDRCTRL = EDMA_CH_RELOAD_BLOCK_gc | EDMA_CH_DIR_INC_gc;
-	EDMA.CH1.TRFCNT   = sizeof(buzz_sampl);
-	EDMA.CH1.ADDR     = (uint16_t)(buzz_sampl);
+	EDMA.CH1.TRFCNT   = buzztrf[sel];
+	EDMA.CH1.ADDR     = buzzz[sel];
 
 	EDMA.CH1.TRIGSRC  = EDMA_CH_TRIGSRC_DACA_CH0_gc;
 
@@ -587,7 +614,7 @@ uint8_t run(void)
 
 	TCD5.CTRLB = TC45_BYTEM_NORMAL_gc | TC45_CIRCEN_DISABLE_gc | TC45_WGMODE_NORMAL_gc;
 	TCD5.CNT   = 0;
-	TCD5.PER   = (10000000/16000) - 1;
+	TCD5.PER   = buzzper[sel];
 	TCD5.CTRLA = TC45_CLKSEL_DIV1_gc;
 	EVSYS.CH1MUX = EVSYS_CHMUX_TCD5_OVF_gc;
 
